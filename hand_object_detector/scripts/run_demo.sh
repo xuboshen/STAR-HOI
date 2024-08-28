@@ -1,0 +1,1 @@
+python demo.py --cuda --checkepoch='8' --checkpoint 132028 --checksession 1 --image_dir images

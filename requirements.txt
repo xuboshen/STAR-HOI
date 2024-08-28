@@ -1,0 +1,5 @@
+opencv-python
+easydict
+scipy
+matplotlib
+pre-commit
