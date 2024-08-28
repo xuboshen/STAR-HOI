@@ -55,6 +55,7 @@ def show_masks(
     box_coords=None,
     input_labels=None,
     borders=True,
+    thresh_sam_score=0.5,
 ):
     if len(box_coords.shape) == 1:
 
@@ -62,9 +63,6 @@ def show_masks(
             print(i)
             plt.figure(figsize=(10, 10))
             plt.imshow(image)
-            import pdb
-
-            pdb.set_trace()
             show_mask(mask, plt.gca(), borders=borders)
             # plt.imshow(mask_image)
             if point_coords is not None:
@@ -84,7 +82,6 @@ def show_masks(
         if len(masks.shape) == 4:  # N_prompt, Number_of_images, H, W
             masks = np.transpose(masks, (1, 0, 2, 3))
             scores = np.transpose(scores, (1, 0))
-        thresh_sam_score = 0.5
         for i, (mask, score) in enumerate(zip(masks, scores)):
             print(i)
             for msk, box, sco in zip(mask, box_coords, score):
@@ -123,14 +120,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process some integers.")
     parser.add_argument("--foo", help="foo help")
     # parser.add_argument('--image-dir', type=str, choices=range(1, 4))
-    parser.add_argument("--image-dir", type=str, default="/images/ego4d_example.png")
+    parser.add_argument("--image-dir", type=str, default="images/ego4d_example.png")
     parser.add_argument(
-        "--multiple-object-track",
+        "--multiobj-track",
         action="store_true",
         help="Default to be False, i.e. default is single_object",
     )
     parser.add_argument(
-        "--object-thresh",
+        "--thresh-sam-score",
         type=float,
         default=0.7,
         help="the threshold score that a object is good",
@@ -173,13 +170,13 @@ if __name__ == "__main__":
     image = Image.open(args.image_dir)
     image = np.array(image.convert("RGB"))
 
-    multiple_object_track = args.multiple_object_track
+    multiple_object_track = args.multiobj_track
     if args.prompt_type == "box":
         if multiple_object_track:
-            box_input = hand_boxes[0]  # (4, )
-        else:
             # default
             box_input = np.concatenate([obj_boxes, hand_boxes], axis=0)  # (N, 4)
+        else:
+            box_input = hand_boxes[0]  # (4, )
         print(box_input.shape)
 
         input_args_to_sam2 = dict(box=box_input, multimask_output=args.multimask_output)
@@ -193,11 +190,12 @@ if __name__ == "__main__":
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         predictor.set_image(image)
         # masks, _, _ = predictor.predict()
-        masks, scores, _ = predictor.predict(
-            point_coords=None,
-            point_labels=None,
-            box=box_input,
-            multimask_output=False,  # if true, multiple outputs, else only one output
+        masks, scores, _ = predictor.predict(**input_args_to_sam2)
+        show_masks(
+            image,
+            masks,
+            scores,
+            box_coords=box_input,
+            thresh_sam_score=args.thresh_sam_score,
         )
-        show_masks(image, masks, scores, box_coords=box_input)
         print(masks.shape)

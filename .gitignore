@@ -1,4 +1,5 @@
 checkpoints/*
+examples
 
 # ignore all temporal files
 .mypy_cache
