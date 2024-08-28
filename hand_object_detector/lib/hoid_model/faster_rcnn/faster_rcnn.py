@@ -94,7 +94,8 @@ class _fasterRCNN(nn.Module):
 
         rois = Variable(rois)
         rois_padded = Variable(self.enlarge_bbox(im_info, rois, 0.3))
-
+        
+        cfg.POOLING_MODE = "pool"
         # do roi pooling based on predicted rois
         if cfg.POOLING_MODE == "align":
             pooled_feat = self.RCNN_roi_align(base_feat, rois.view(-1, 5))

@@ -2,11 +2,21 @@ import argparse
 import os
 import time
 
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 from hoid_model.faster_rcnn.resnet import resnet
 from hoid_model.faster_rcnn.vgg16 import vgg16
+from hoid_model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
+from hoid_model.utils.net_utils import (  # (1) here add a function to viz
+    load_net,
+    save_net,
+    vis_detections,
+    vis_detections_filtered_objects,
+    vis_detections_filtered_objects_PIL,
+    vis_detections_PIL,
+)
 from PIL import Image
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
@@ -18,7 +28,9 @@ from star_hoi.data.utils import (
     prepare_boxes,
     prepare_inputs,
 )
-from star_hoi.utils.metrics import calculate_visor_metrics
+from star_hoi.utils.visualize import show_masks
+
+# from star_hoi.utils.metrics import calculate_visor_metrics
 
 
 def get_hoid_model(args):
@@ -49,7 +61,7 @@ def get_hoid_model(args):
     fasterRCNN.create_architecture()
 
     print("load checkpoint %s" % (load_name))
-    if args.cuda is True:
+    if args.no_cuda is False:
         checkpoint = torch.load(load_name)
     else:
         checkpoint = torch.load(load_name, map_location=(lambda storage, loc: storage))
@@ -156,14 +168,14 @@ def validate_image(
     args, val_loader, hoi_detector, sam_model, prompt_type, use_half=False
 ):
     hoi_detector.eval()
-    sam_model.eval()
     is_multi_obj = args.multiobj_track
     tgt_type = args.target_type
     input_dicts = initialize_inputs(no_cuda=args.no_cuda)
+    im_hoi = cv2.imread("examples/ego4d_example.png")
 
     for i, image in enumerate(val_loader):
         # hoi_detector pre-processing
-        input_dicts, im_scales = prepare_inputs(image, **input_dicts)
+        input_dicts, im_scales = prepare_inputs(im_hoi, **input_dicts)
         # model inference
         (rois, cls_prob, bbox_pred, _, _, _, _, _, loss_list) = hoi_detector(
             **input_dicts
@@ -178,6 +190,12 @@ def validate_image(
             input_dicts["im_info"],
             args.thresh_hoid_score,
         )
+        if args.vis:
+            im2show = np.copy(im_hoi)
+            im2show = vis_detections_filtered_objects_PIL(
+                im2show, obj_dets, hand_dets, 0.5, 0.5
+            )
+            im2show.save(os.path.join(args.result_path, "ego4d_det_det.png"))
         # sam pre-processing
         if prompt_type == "box":
             box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type)
@@ -186,6 +204,15 @@ def validate_image(
             raise NotImplementedError(f"{args.prompt_type} not implemented yet")
         # model inference
         masks, sam_scores = sam_prediction(sam_model, image, prompt_inputs)
+        if args.vis:
+            show_masks(
+                image,
+                masks,
+                sam_scores,
+                box_coords=box_input,
+                thresh_sam_score=args.thresh_sam_score,
+            )
+            print(masks.shape)
 
 
 if __name__ == "__main__":
@@ -197,6 +224,12 @@ if __name__ == "__main__":
         "--multiobj-track",
         action="store_true",
         help="Default to be False, i.e. default is single_object",
+    )
+    parser.add_argument(
+        "--dataset-name",
+        default="demo",
+        type=str,
+        help="choose from visor, demo",
     )
     parser.add_argument(
         "--print-freq",
@@ -262,6 +295,11 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument(
+        "--vis",
+        help="default is true, test the results",
+        action="store_true",
+    )
+    parser.add_argument(
         "--sam-model-cfg",
         type=str,
         default="sam2_hiera_l.yaml",
@@ -293,6 +331,12 @@ if __name__ == "__main__":
         "--test-sam2",
         nargs="*",
         help="support more than one argument and merge into a list.",
+    )
+    parser.add_argument(
+        "--result-path",
+        type=str,
+        default="image_vis",
+        help="path to save",
     )
 
     args = parser.parse_args()

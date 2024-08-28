@@ -3,9 +3,9 @@ import time
 import cv2
 import numpy as np
 import torch
-from hoi_model.utils.blob import im_list_to_blob
 from hoid_model.roi_layers import nms
 from hoid_model.rpn.bbox_transform import bbox_transform_inv, clip_boxes
+from hoid_model.utils.blob import im_list_to_blob
 
 try:
     xrange  # Python 2

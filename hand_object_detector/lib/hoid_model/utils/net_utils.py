@@ -151,7 +151,7 @@ def vis_detections_filtered_objects_PIL(
     im = im[:, :, ::-1]
     image = Image.fromarray(im).convert("RGBA")
     draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype(font_path, size=30)
+    font = ImageFont.truetype('hand_object_detector'+'/'+font_path, size=30)
     width, height = image.size
 
     if (obj_dets is not None) and (hand_dets is not None):

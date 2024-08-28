@@ -475,7 +475,7 @@ if __name__ == "__main__":
                         obj_dets = cls_dets.cpu().numpy()
                     if pascal_classes[j] == "hand":
                         hand_dets = cls_dets.cpu().numpy()
-            import pdb; pdb.set_trace()
+                        
             if vis:
                 # visualization
                 im2show = vis_detections_filtered_objects_PIL(
