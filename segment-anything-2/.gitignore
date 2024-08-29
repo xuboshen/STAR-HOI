@@ -10,3 +10,4 @@ outputs/*
 checkpoints/*.pt
 images/
 images_vis/
+notebooks/videos/bedroom_vis
