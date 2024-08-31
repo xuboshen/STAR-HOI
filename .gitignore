@@ -1,5 +1,8 @@
 checkpoints/*
 examples
+scripts/run_visor_hos/test.sh
+image_vis/*
+outputs/
 
 # ignore all temporal files
 .mypy_cache

@@ -3,3 +3,5 @@ easydict
 scipy
 matplotlib
 pre-commit
+cython
+pycocotools=2.0.0

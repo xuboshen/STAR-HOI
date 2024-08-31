@@ -71,8 +71,10 @@ cd hand_object_detector/lib
 pip install -e .
 ```
 
-
-
+Install detectron
+```bash
+python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
+```
 
 
 \
@@ -242,151 +244,10 @@ python grounded_sam2_tracking_demo_with_continuous_id_plus.py
 
 ```
 
-## Grounded SAM 2 Florence-2 Demos
-### Grounded SAM 2 Florence-2 Image Demo
-
-In this section, we will explore how to integrate the feature-rich and robust open-source models [Florence-2](https://arxiv.org/abs/2311.06242) and SAM 2 to develop practical applications.
-
-[Florence-2](https://arxiv.org/abs/2311.06242) is a powerful vision foundation model by Microsoft which supports a series of vision tasks by prompting with special `task_prompt` includes but not limited to:
-
-| Task | Task Prompt | Text Input | Task Introduction |
-|:---:|:---:|:---:|:---:|
-| Object Detection | `<OD>` | &#10008; | Detect main objects with single category name |
-| Dense Region Caption | `<DENSE_REGION_CAPTION>` | &#10008; | Detect main objects with short description |
-| Region Proposal | `<REGION_PROPOSAL>` | &#10008; | Generate proposals without category name |
-| Phrase Grounding | `<CAPTION_TO_PHRASE_GROUNDING>` | &#10004; | Ground main objects in image mentioned in caption |
-| Referring Expression Segmentation | `<REFERRING_EXPRESSION_SEGMENTATION>` | &#10004; | Ground the object which is most related to the text input |
-| Open Vocabulary Detection and Segmentation | `<OPEN_VOCABULARY_DETECTION>` | &#10004; | Ground any object with text input |
-
-
-Integrate `Florence-2` with `SAM-2`, we can build a strong vision pipeline to solve complex vision tasks, you can try the following scripts to run the demo:
-
-> [!NOTE]
-> 🚨 If you encounter network issues while using the `HuggingFace` model, you can resolve them by setting the appropriate mirror source as `export HF_ENDPOINT=https://hf-mirror.com`
-
-**Object Detection and Segmentation**
-```bash
-python grounded_sam2_florence2_image_demo.py \
-    --pipeline object_detection_segmentation \
-    --image_path ./notebooks/images/cars.jpg
-```
-
-**Dense Region Caption and Segmentation**
-```bash
-python grounded_sam2_florence2_image_demo.py \
-    --pipeline dense_region_caption_segmentation \
-    --image_path ./notebooks/images/cars.jpg
-```
-
-**Region Proposal and Segmentation**
-```bash
-python grounded_sam2_florence2_image_demo.py \
-    --pipeline region_proposal_segmentation \
-    --image_path ./notebooks/images/cars.jpg
-```
-
-**Phrase Grounding and Segmentation**
-```bash
-python grounded_sam2_florence2_image_demo.py \
-    --pipeline phrase_grounding_segmentation \
-    --image_path ./notebooks/images/cars.jpg \
-    --text_input "The image shows two vintage Chevrolet cars parked side by side, with one being a red convertible and the other a pink sedan, \
-            set against the backdrop of an urban area with a multi-story building and trees. \
-            The cars have Cuban license plates, indicating a location likely in Cuba."
-```
-
-**Referring Expression Segmentation**
-```bash
-python grounded_sam2_florence2_image_demo.py \
-    --pipeline referring_expression_segmentation \
-    --image_path ./notebooks/images/cars.jpg \
-    --text_input "The left red car."
-```
-
-**Open-Vocabulary Detection and Segmentation**
-```bash
-python grounded_sam2_florence2_image_demo.py \
-    --pipeline open_vocabulary_detection_segmentation \
-    --image_path ./notebooks/images/cars.jpg \
-    --text_input "car <and> building"
-```
-- Note that if you want to detect multi-objects you should split them with `<and>` in your input text.
-
-
-### Grounded SAM 2 Florence-2 Image Auto-Labeling Demo
-`Florence-2` can be used as a auto image annotator by cascading its caption capability with its grounding capability. 
-
-| Task | Task Prompt | Text Input |
-|:---:|:---:|:---:|
-| Caption + Phrase Grounding | `<CAPTION>` + `<CAPTION_TO_PHRASE_GROUNDING>` | &#10008; |
-| Detailed Caption + Phrase Grounding | `<DETAILED_CAPTION>` + `<CAPTION_TO_PHRASE_GROUNDING>` | &#10008; |
-| More Detailed Caption + Phrase Grounding | `<MORE_DETAILED_CAPTION>` + `<CAPTION_TO_PHRASE_GROUNDING>` | &#10008; |
-
-You can try the following scripts to run these demo:
-
-**Caption to Phrase Grounding**
-```bash
-python grounded_sam2_florence2_autolabel_pipeline.py \
-    --image_path ./notebooks/images/groceries.jpg \
-    --pipeline caption_to_phrase_grounding \
-    --caption_type caption
-```
-
-- You can specify `caption_type` to control the granularity of the caption, if you want a more detailed caption, you can try `--caption_type detailed_caption` or `--caption_type more_detailed_caption`.
-
 ### Citation
 
-If you find this project helpful for your research, please consider citing the following BibTeX entry.
+### Thanks:
 
-```BibTex
-@misc{ravi2024sam2segmentimages,
-      title={SAM 2: Segment Anything in Images and Videos}, 
-      author={Nikhila Ravi and Valentin Gabeur and Yuan-Ting Hu and Ronghang Hu and Chaitanya Ryali and Tengyu Ma and Haitham Khedr and Roman Rädle and Chloe Rolland and Laura Gustafson and Eric Mintun and Junting Pan and Kalyan Vasudev Alwala and Nicolas Carion and Chao-Yuan Wu and Ross Girshick and Piotr Dollár and Christoph Feichtenhofer},
-      year={2024},
-      eprint={2408.00714},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2408.00714}, 
-}
-
-@article{liu2023grounding,
-  title={Grounding dino: Marrying dino with grounded pre-training for open-set object detection},
-  author={Liu, Shilong and Zeng, Zhaoyang and Ren, Tianhe and Li, Feng and Zhang, Hao and Yang, Jie and Li, Chunyuan and Yang, Jianwei and Su, Hang and Zhu, Jun and others},
-  journal={arXiv preprint arXiv:2303.05499},
-  year={2023}
-}
-
-@misc{ren2024grounding,
-      title={Grounding DINO 1.5: Advance the "Edge" of Open-Set Object Detection}, 
-      author={Tianhe Ren and Qing Jiang and Shilong Liu and Zhaoyang Zeng and Wenlong Liu and Han Gao and Hongjie Huang and Zhengyu Ma and Xiaoke Jiang and Yihao Chen and Yuda Xiong and Hao Zhang and Feng Li and Peijun Tang and Kent Yu and Lei Zhang},
-      year={2024},
-      eprint={2405.10300},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
-}
-
-@misc{ren2024grounded,
-      title={Grounded SAM: Assembling Open-World Models for Diverse Visual Tasks}, 
-      author={Tianhe Ren and Shilong Liu and Ailing Zeng and Jing Lin and Kunchang Li and He Cao and Jiayu Chen and Xinyu Huang and Yukang Chen and Feng Yan and Zhaoyang Zeng and Hao Zhang and Feng Li and Jie Yang and Hongyang Li and Qing Jiang and Lei Zhang},
-      year={2024},
-      eprint={2401.14159},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
-}
-
-@article{kirillov2023segany,
-  title={Segment Anything}, 
-  author={Kirillov, Alexander and Mintun, Eric and Ravi, Nikhila and Mao, Hanzi and Rolland, Chloe and Gustafson, Laura and Xiao, Tete and Whitehead, Spencer and Berg, Alexander C. and Lo, Wan-Yen and Doll{\'a}r, Piotr and Girshick, Ross},
-  journal={arXiv:2304.02643},
-  year={2023}
-}
-
-@misc{jiang2024trex2,
-      title={T-Rex2: Towards Generic Object Detection via Text-Visual Prompt Synergy}, 
-      author={Qing Jiang and Feng Li and Zhaoyang Zeng and Tianhe Ren and Shilong Liu and Lei Zhang},
-      year={2024},
-      eprint={2403.14610},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
-}
-```
+[detectron2](https://github.com/facebookresearch/detectron2)
+[visor-hos](https://github.com/epic-kitchens/VISOR-HOS)
+[sam2](https://github.com/facebookresearch/segment-anything-2)

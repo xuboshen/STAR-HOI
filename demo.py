@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import torch
 import torch.nn as nn
+from detectron2.structures import Boxes
 from hoid_model.faster_rcnn.resnet import resnet
 from hoid_model.faster_rcnn.vgg16 import vgg16
 from hoid_model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
@@ -21,16 +22,40 @@ from PIL import Image
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-from star_hoi.data.dataset import VISOR
+from star_hoi.data.dataloader import build_detection_test_loader
+from star_hoi.data.dataset import VISOR_Image, build_dataset
+from star_hoi.data.sampler import InferenceSampler
 from star_hoi.data.utils import (
     detection_post_process,
     initialize_inputs,
     prepare_boxes,
     prepare_inputs,
 )
+from star_hoi.evaluation.evaluator import build_evaluator
 from star_hoi.utils.visualize import show_masks
 
-# from star_hoi.utils.metrics import calculate_visor_metrics
+
+# # from star_hoi.utils.metrics import calculate_visor_metrics
+def prepare_output_for_evaluator():
+    pass
+
+
+#     from star_hoi.data.instances import Instances
+
+#     output = {}
+
+#     result = Instances(image_shape)
+#     result.pred_boxes = Boxes(boxes)
+#     result.scores = scores
+#     result.pred_classes = filter_inds[:, 1]
+#     #
+#     result.pred_handsides = handsides
+#     result.pred_contacts = contacts
+#     result.pred_offsets = offsets
+
+#     output["instances"] = result
+
+#     return output
 
 
 def get_hoid_model(args):
@@ -106,75 +131,34 @@ def get_model(args, model_names):
     return hoi_detector, sam_model
 
 
-def validate_visor(args, val_loader, hoi_detector, sam_model, use_half=False):
-    hoi_detector.eval()
-    sam_model.eval()
-    # if use_half:
-    #     model.half()
-    # with torch.no_grad():
-    #     print('=> start forwarding')
-    #     all_preds = []
-    #     all_gts = []
-    #     all_types = []
-    #     end_time = time.time()
-    #     for i, inputs in enumerate(val_loader):
-    #         if i % args.print_freq == 0:
-    #             print('finish batch {}/{} in {} sec'.format(i, len(val_loader), time.time() - end_time))
-    #             end_time = time.time()
-    #         texts_query = inputs[0].cuda(non_blocking=True)
-    #         frames = inputs[1].cuda(non_blocking=True)
-    #         if use_half:
-    #             frames = frames.half()
-    #         verb_choice = inputs[2].cuda(non_blocking=True)
-    #         noun_choice = inputs[3].cuda(non_blocking=True)
-    #         # answer = inputs[3]
-    #         # q_type = inputs[4]
-    #         if len(inputs) == 7:
-    #             masks_query = inputs[5].cuda(non_blocking=True)
-    #         else:
-    #             masks_query = None
-
-    #         batch_size = frames.shape[0]
-
-    #         frames_options =  frames #frames_options.view(-1, *frames_options.shape[2:])
-    #         image_features = dist_utils.get_model(model).encode_image(frames_options)
-    #         # image_features = image_features.view(batch_size, -1, *image_features.shape[1:])
-
-    #         if masks_query is not None:
-    #             query_features = dist_utils.get_model(model).encode_text(texts_query, attention_mask=masks_query)
-    #         else:
-    #             query_features = dist_utils.get_model(model).encode_text(texts_query)
-
-    #             verb_features = dist_utils.get_model(model).encode_text(verb_choice.view(-1,verb_choice.shape[-1]))
-    #             verb_features = verb_features.view(batch_size, -1, verb_features.shape[-1])
-    #             noun_features = dist_utils.get_model(model).encode_text(noun_choice.view(-1,noun_choice.shape[-1]))
-    #             noun_features = noun_features.view(batch_size, -1, noun_features.shape[-1])
-
-    #         # all_gts.append(answer)
-    #         # all_types.append(q_type)
-    #         for j in range(batch_size):
-    #             query_sim = torch.matmul(image_features[j], query_features[j].T).cpu().detach().unsqueeze(0)
-    #             verb_sim = torch.matmul(image_features[j], verb_features[j].T).cpu().detach()
-    #             noun_sim = torch.matmul(image_features[j], noun_features[j].T).cpu().detach()
-    #             similarity_matrix = torch.cat((query_sim, verb_sim, noun_sim))
-    #             all_preds.append(similarity_matrix)
-    #     all_preds = torch.stack(all_preds)
-    #     metrics = egohoi_accuracy_metrics(all_preds)
-    #     print(metrics)
-    #     return metrics
-
-
-def validate_image(
-    args, val_loader, hoi_detector, sam_model, prompt_type, use_half=False
+def validate_visor_image(
+    args, val_loader, hoi_detector, sam_model, evaluator, prompt_type, use_half=False
 ):
+    """
+    used for inference, i.e., with evaluation
+    """
+    print("Inference Begins...")
     hoi_detector.eval()
     is_multi_obj = args.multiobj_track
     tgt_type = args.target_type
     input_dicts = initialize_inputs(no_cuda=args.no_cuda)
-    im_hoi = cv2.imread("examples/ego4d_example.png")
+    # evaluator init
+    evaluator.reset()
 
-    for i, image in enumerate(val_loader):
+    for i, inputs in enumerate(val_loader):
         # hoi_detector pre-processing
+        # from BGR, 750, 1333-->750, 1333, BGR
+        im_hoi = inputs[0]["image"].permute(1, 2, 0).numpy()
+        # from BGR to RGB, for the sake of sam2 input
+        image = np.ascontiguousarray(im_hoi[..., ::-1])
+        if args.vis and i == 0:
+            import matplotlib.pyplot as plt
+
+            plt.figure(figsize=(10, 10))
+            plt.imshow(image)
+            plt.axis("off")
+            plt.savefig("image_vis/test_visor_example.png", dpi=200)
+
         input_dicts, im_scales = prepare_inputs(im_hoi, **input_dicts)
         # model inference
         (rois, cls_prob, bbox_pred, _, _, _, _, _, loss_list) = hoi_detector(
@@ -195,7 +179,78 @@ def validate_image(
             im2show = vis_detections_filtered_objects_PIL(
                 im2show, obj_dets, hand_dets, 0.5, 0.5
             )
-            im2show.save(os.path.join(args.result_path, "ego4d_det_det.png"))
+            im2show.save(os.path.join(args.vis_path, "test_visor_example_det.png"))
+        # sam pre-processing
+        if prompt_type == "box":
+            box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type)
+            prompt_inputs = dict(box=box_input, multimask_output=args.multimask_output)
+        else:
+            raise NotImplementedError(f"{args.prompt_type} not implemented yet")
+        # model inference
+        masks, sam_scores = sam_prediction(sam_model, image, prompt_inputs)
+        if args.vis:
+            show_masks(
+                image,
+                masks,
+                sam_scores,
+                box_coords=box_input,
+                thresh_sam_score=args.thresh_sam_score,
+                save_fig_name="test_visor_example_mask",
+            )
+            print(masks.shape)
+            # evaluator run
+        outputs = prepare_output_for_evaluator(...)
+        evaluator.process(inputs, outputs)
+        import pdb
+
+        pdb.set_trace()
+
+    results = evaluator.evaluate()
+
+    if results is None:
+        results = {}
+
+    return results
+
+
+def validate_demo_image(
+    args, val_loader, hoi_detector, sam_model, prompt_type, use_half=False
+):
+    """
+    only used for demo, i.e. without evaluation
+    here, val_loader = [image]
+    """
+    print("demo image processing begins...")
+    hoi_detector.eval()
+    is_multi_obj = args.multiobj_track
+    tgt_type = args.target_type
+    input_dicts = initialize_inputs(no_cuda=args.no_cuda)
+    # im_hoi = cv2.imread("examples/ego4d_example.png")
+    for i, image in enumerate(val_loader):
+        im_hoi = image[..., ::-1]
+        # hoi_detector pre-processing
+        input_dicts, im_scales = prepare_inputs(im_hoi, **input_dicts)  # input: BGR
+        # model inference
+        (rois, cls_prob, bbox_pred, _, _, _, _, _, loss_list) = hoi_detector(
+            **input_dicts
+        )
+        hand_dets, obj_dets = detection_post_process(
+            args,
+            rois,
+            cls_prob,
+            bbox_pred,
+            loss_list,
+            im_scales,
+            input_dicts["im_info"],
+            args.thresh_hoid_score,
+        )
+        if args.vis:
+            im2show = np.copy(im_hoi)
+            im2show = vis_detections_filtered_objects_PIL(
+                im2show, obj_dets, hand_dets, 0.5, 0.5
+            )
+            im2show.save(os.path.join(args.vis_path, "ego4d_det_det.png"))
+            print(f"saving hoi detection image ... to {args.vis_path}/ego4d_det.png")
         # sam pre-processing
         if prompt_type == "box":
             box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type)
@@ -218,18 +273,35 @@ def validate_image(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process some integers.")
     parser.add_argument("--foo", help="foo help")
-    # parser.add_argument('--image-dir', type=str, choices=range(1, 4))
-    parser.add_argument("--image-dir", type=str, default="images/ego4d_example.png")
+    # common arguments
     parser.add_argument(
-        "--multiobj-track",
+        "--image-path",
+        type=str,
+        default="images/ego4d_example.png",
+        help="which is also the image_root",
+    )
+    parser.add_argument(
+        "--anno-path",
+        type=str,
+        default="VISOR/epick_visor_coco_hos/annotations/val.json",
+        help="the annotation file",
+    )
+    parser.add_argument(
+        "--vis",
+        help="default is False, test the results",
         action="store_true",
-        help="Default to be False, i.e. default is single_object",
+    )
+    parser.add_argument(
+        "--debug",
+        help="debug model, default is false",
+        action="store_true",
     )
     parser.add_argument(
         "--dataset-name",
         default="demo",
         type=str,
-        help="choose from visor, demo",
+        choices=["demo", "visor_image", "visor_video"],
+        help="choose from visor_sparse, visor_dense, demo",
     )
     parser.add_argument(
         "--print-freq",
@@ -244,23 +316,34 @@ if __name__ == "__main__":
         help="use of off-the-shelf models",
     )
     parser.add_argument(
+        "--no-cuda",
+        action="store_true",
+        help="Default is False, i.e., with cuda",
+    )
+    parser.add_argument(
+        "--test-sam2",
+        nargs="*",
+        help="support more than one argument and merge into a list.",
+    )
+    parser.add_argument(
+        "--output-path",
+        type=str,
+        default="outputs",
+        help="save to output path",
+    )
+    parser.add_argument(
+        "--vis-path",
+        type=str,
+        default="image_vis",
+        help="visualization path to save",
+    )
+
+    # hoid model parameters
+    parser.add_argument(
         "--thresh-hoid-score",
         type=float,
         default=0.5,
         help="the threshold score that a detection of hoi detector is good",
-    )
-    parser.add_argument(
-        "--thresh-sam-score",
-        type=float,
-        default=0.7,
-        help="the threshold score that a object is good",
-    )
-    parser.add_argument(
-        "--prompt-type",
-        type=str,
-        default="box",
-        choices=["box", "point", "mask", "mixed"],
-        help="the threshold score that a object is good",
     )
     parser.add_argument(
         "--target-type",
@@ -294,10 +377,24 @@ if __name__ == "__main__":
         help="whether perform class_agnostic bbox regression, default is False",
         action="store_true",
     )
+    # sam2 model parameters
     parser.add_argument(
-        "--vis",
-        help="default is true, test the results",
+        "--thresh-sam-score",
+        type=float,
+        default=0.7,
+        help="the threshold score that a object is good",
+    )
+    parser.add_argument(
+        "--multiobj-track",
         action="store_true",
+        help="Default to be False, i.e. default is single_object",
+    )
+    parser.add_argument(
+        "--prompt-type",
+        type=str,
+        default="box",
+        choices=["box", "point", "mask", "mixed"],
+        help="the threshold score that a object is good",
     )
     parser.add_argument(
         "--sam-model-cfg",
@@ -322,39 +419,42 @@ if __name__ == "__main__":
         action="store_true",
         help="Default is False, i.e., only one mask output, which is suitable for non-ambiguous prompts (e.g., click + box)",
     )
+    # Downstream datasets
     parser.add_argument(
-        "--no-cuda",
-        action="store_true",
-        help="Default is False, i.e., with cuda",
-    )
-    parser.add_argument(
-        "--test-sam2",
-        nargs="*",
-        help="support more than one argument and merge into a list.",
-    )
-    parser.add_argument(
-        "--result-path",
+        "--eval-task",
         type=str,
-        default="image_vis",
-        help="path to save",
+        default="hand_obj",
+        choices=["hand_obj"],
+        help="Used for eval_task of single-image VISOR-HOS Benchmark",
     )
 
     args = parser.parse_args()
     model_names = args.model_names
 
     # data preparation
-    if args.dataset_name == "visor":
-        val_dataset = VISOR()
-        val_loader = nn.DataLoader(val_dataset, ...)
+    if args.dataset_name.startswith("visor"):
+        val_dataset = build_dataset(
+            args, args.dataset_name, args.anno_path, args.image_path
+        )
+        sampler = InferenceSampler(len(val_dataset))
+        val_loader = build_detection_test_loader(val_dataset, sampler)
+        # evaluator
+        evaluator = build_evaluator(args, args.eval_task)
     elif args.dataset_name == "demo":
         image = Image.open("examples/ego4d_example.png")
         image = np.array(image.convert("RGB"))
-
     # model preparation
     hoi_detector, sam_model = get_model(args, model_names)
 
     # inference
-    if args.dataset_name == "visor":
-        validate_visor(args, val_loader, hoi_detector, sam_model)
+    if args.dataset_name.startswith("visor_image"):
+        if args.debug:
+            validate_visor_image(
+                args, val_loader, hoi_detector, sam_model, evaluator, args.prompt_type
+            )
+        else:
+            raise NotImplementedError("Not ready yet, still in debug states")
     elif args.dataset_name == "demo":
-        validate_image(args, [image], hoi_detector, sam_model, args.prompt_type)
+        validate_demo_image(args, [image], hoi_detector, sam_model, args.prompt_type)
+
+    # evaluate()

@@ -73,6 +73,7 @@ def show_masks(
     input_labels=None,
     borders=True,
     thresh_sam_score=0.5,
+    save_fig_name="default",
 ):
     if len(box_coords.shape) == 1:
 
@@ -92,7 +93,7 @@ def show_masks(
                 plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
             plt.axis("off")
             os.makedirs("image_vis", exist_ok=True)
-            plt.savefig(f"image_vis/masked_ego4d_example_{i}.png", dpi=200)
+            plt.savefig(f"image_vis/{i}_{save_fig_name}.png", dpi=200)
     elif len(box_coords.shape) == 2:
         plt.figure(figsize=(10, 10))
         plt.imshow(image)
@@ -122,4 +123,5 @@ def show_masks(
             #         plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
             plt.axis("off")
             os.makedirs("image_vis", exist_ok=True)
-            plt.savefig(f"image_vis/masked_ego4d_example_{i}.png", dpi=200)
+            plt.savefig(f"image_vis/{i}_{save_fig_name}.png", dpi=200)
+            print(f"saving sam2 mask image ... to image_vis/{i}_{save_fig_name}.png")
