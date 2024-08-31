@@ -75,6 +75,9 @@ def show_masks(
     thresh_sam_score=0.5,
     save_fig_name="default",
 ):
+    if box_coords.shape[0] == 1:
+        box_coords = box_coords.reshape(-1)
+
     if len(box_coords.shape) == 1:
 
         for i, (mask, score) in enumerate(zip(masks, scores)):

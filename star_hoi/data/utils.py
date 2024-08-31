@@ -347,8 +347,11 @@ def prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type):
     tgt_type: in ['obj', 'lh', 'rh', 'hoi']
     """
     box_input = None
-    obj_boxes = obj_dets[:, :4]
-    hand_boxes = hand_dets[:, :4]
+    if obj_dets is not None:
+        obj_boxes = obj_dets[:, :4]
+    if hand_dets is not None:
+        hand_boxes = hand_dets[:, :4]
+
     if tgt_type == "obj":
         box_input = obj_boxes
     elif tgt_type == "lh":
@@ -356,7 +359,14 @@ def prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type):
     elif tgt_type == "rh":
         pass
     elif tgt_type == "hoi":
-        box_input = np.concatenate([obj_boxes, hand_boxes], axis=0)  # (N, 4)
+        if obj_dets is None and hand_dets is None:
+            return None
+        elif obj_dets is not None and hand_dets is None:
+            box_input = obj_boxes
+        elif obj_dets is None and hand_dets is not None:
+            box_input = hand_boxes
+        else:
+            box_input = np.concatenate([obj_boxes, hand_boxes], axis=0)  # (N, 4)
     else:
         raise NotImplementedError(f"{tgt_type} not implemented yet")
 

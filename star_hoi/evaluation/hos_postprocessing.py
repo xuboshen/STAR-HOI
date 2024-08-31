@@ -1,6 +1,7 @@
 import numpy as np
 import torch
-from detectron2.structures import Instances
+
+from star_hoi.data.instances import Instances
 
 
 def hos_postprocessing(predictions):

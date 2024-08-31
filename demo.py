@@ -24,6 +24,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 from star_hoi.data.dataloader import build_detection_test_loader
 from star_hoi.data.dataset import VISOR_Image, build_dataset
+from star_hoi.data.instances import Instances
 from star_hoi.data.sampler import InferenceSampler
 from star_hoi.data.utils import (
     detection_post_process,
@@ -32,30 +33,72 @@ from star_hoi.data.utils import (
     prepare_inputs,
 )
 from star_hoi.evaluation.evaluator import build_evaluator
+from star_hoi.utils.utils import concate_hoi, numpy_to_torch_dtype
 from star_hoi.utils.visualize import show_masks
 
 
 # # from star_hoi.utils.metrics import calculate_visor_metrics
-def prepare_output_for_evaluator():
-    pass
+def prepare_output_for_evaluator(
+    image_shape, masks, boxes, scores, hand_dets, obj_dets
+):
+    """
+    explanations of detailed params: https://github.com/epic-kitchens/epic-kitchens-100-hand-object-bboxes/blob/af22bca2124389b96fbf01b19f8684c302fea22f/src/raw_detections/types.py#L24
+    sequence: objects+hands
+    args:
+        image_shape: (height, width), (750, 1333)
+        masks: N (num_of_instances), height, width
+        boxes: N, 2
+        scores: sam scores, N, 1
+        handsides: pred_handsides, N, 2. 0: left hand, 1: right hand
+        hand_dets/obj_dets: note the case that they are <None>
+    """
+    output = {}
+    result = Instances(image_shape)
 
+    classes = []
+    if obj_dets is not None:
+        classes.extend([1] * obj_dets.shape[0])
+    if hand_dets is not None:
+        classes.extend([0] * hand_dets.shape[0])
 
-#     from star_hoi.data.instances import Instances
+    # handside convertion
+    handsides = concate_hoi(
+        hand_dets, obj_dets, -1
+    )  # np.concatenate([obj_dets[:, -1], hand_dets[:, -1]])
+    # convert to N, 2, one-hots
+    one_hot_mat = np.eye(2)
+    handsides = one_hot_mat[handsides.astype(int)].astype(float)
+    # contact convertion
+    contacts = concate_hoi(
+        hand_dets, obj_dets, 5
+    )  # np.concatenate([obj_dets[:, 5], hand_dets[:, 5]])
+    # map [1, 4] to 1, while 0 remains 0, also to one-hot
+    contacts = np.where(contacts == 0, 0, 1)
+    contacts = one_hot_mat[contacts.astype(int)].astype(float)
+    # offsets convertion
+    # TBD: seems not very correct in scales.
+    offsets = concate_hoi(
+        hand_dets, obj_dets, list(range(6, 9))
+    )  # np.concatenate([obj_dets[:, 6:9], hand_dets[:, 6:9]])
+    # classes convertion
+    pred_classes = torch.tensor(classes, dtype=bool)
+    # TBD: scores to be considered
+    result.scores = scores
+    result.pred_masks = masks
+    result.pred_boxes = Boxes(torch.tensor(boxes, dtype=numpy_to_torch_dtype(boxes)))
+    result.pred_handsides = handsides
+    result.pred_classes = pred_classes
+    result.pred_contacts = contacts
+    result.pred_offsets = offsets
 
-#     output = {}
+    for key, value in result._fields.items():
+        try:
+            result._fields[key] = torch.tensor(value, dtype=numpy_to_torch_dtype(value))
+        except Exception as E:
+            print(E)
+    output["instances"] = result
 
-#     result = Instances(image_shape)
-#     result.pred_boxes = Boxes(boxes)
-#     result.scores = scores
-#     result.pred_classes = filter_inds[:, 1]
-#     #
-#     result.pred_handsides = handsides
-#     result.pred_contacts = contacts
-#     result.pred_offsets = offsets
-
-#     output["instances"] = result
-
-#     return output
+    return output
 
 
 def get_hoid_model(args):
@@ -151,13 +194,13 @@ def validate_visor_image(
         im_hoi = inputs[0]["image"].permute(1, 2, 0).numpy()
         # from BGR to RGB, for the sake of sam2 input
         image = np.ascontiguousarray(im_hoi[..., ::-1])
-        if args.vis and i == 0:
+        if args.vis:
             import matplotlib.pyplot as plt
 
             plt.figure(figsize=(10, 10))
             plt.imshow(image)
             plt.axis("off")
-            plt.savefig("image_vis/test_visor_example.png", dpi=200)
+            plt.savefig(f"image_vis/test_visor_example_{i}.png", dpi=200)
 
         input_dicts, im_scales = prepare_inputs(im_hoi, **input_dicts)
         # model inference
@@ -177,9 +220,14 @@ def validate_visor_image(
         if args.vis:
             im2show = np.copy(im_hoi)
             im2show = vis_detections_filtered_objects_PIL(
-                im2show, obj_dets, hand_dets, 0.5, 0.5
+                im2show,
+                obj_dets,
+                hand_dets,
+                0.5,
+                0.5,
+                font_path="hand_object_detector/lib/hoid_model/utils/times_b.ttf",
             )
-            im2show.save(os.path.join(args.vis_path, "test_visor_example_det.png"))
+            im2show.save(os.path.join(args.vis_path, f"test_visor_example_det_{i}.png"))
         # sam pre-processing
         if prompt_type == "box":
             box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type)
@@ -195,16 +243,20 @@ def validate_visor_image(
                 sam_scores,
                 box_coords=box_input,
                 thresh_sam_score=args.thresh_sam_score,
-                save_fig_name="test_visor_example_mask",
+                save_fig_name=f"test_visor_example_mask_{i}",
             )
-            print(masks.shape)
-            # evaluator run
-        outputs = prepare_output_for_evaluator(...)
-        evaluator.process(inputs, outputs)
-        import pdb
-
-        pdb.set_trace()
-
+            print("mask.shape:", masks.shape)
+            print("sam_scores.shape:", sam_scores.shape)
+        # evaluator run
+        outputs = prepare_output_for_evaluator(
+            image_shape=image.shape[:2],
+            masks=masks.squeeze(1) if masks.shape[1] == 1 else masks,
+            boxes=box_input,
+            scores=sam_scores.squeeze(1) if sam_scores.shape == 2 else sam_scores,
+            hand_dets=hand_dets,
+            obj_dets=obj_dets,
+        )
+        evaluator.process(inputs, [outputs])
     results = evaluator.evaluate()
 
     if results is None:
