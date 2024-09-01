@@ -3,6 +3,7 @@ examples
 scripts/run_visor_hos/test.sh
 image_vis/*
 outputs/
+test.py
 
 # ignore all temporal files
 .mypy_cache

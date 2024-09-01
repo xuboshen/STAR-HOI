@@ -4,7 +4,7 @@ import torch
 import torch.utils.data as torchdata
 from detectron2.data.common import MapDataset
 from detectron2.data.dataset_mapper import DatasetMapper
-from detectron2.data.transforms.augmentation_impl import ResizeShortestEdge
+from detectron2.data.transforms.augmentation_impl import Resize, ResizeShortestEdge
 
 
 def trivial_batch_collator(batch):
@@ -22,13 +22,14 @@ def build_detection_test_loader(
     collate_fn: Optional[Callable[[List[Any]], Any]] = None,
 ):
 
+    # augmentations=[
+    #     ResizeShortestEdge(
+    #         short_edge_length=(800, 800), max_size=1333, sample_style="choice"
+    #     )
+    # ],
     input_to_mapper = dict(
         is_train=False,
-        augmentations=[
-            ResizeShortestEdge(
-                short_edge_length=(800, 800), max_size=1333, sample_style="choice"
-            )
-        ],
+        augmentations=[Resize((1080, 1920))],
         image_format="BGR",
         use_instance_mask="True",
         instance_mask_format="bitmask",

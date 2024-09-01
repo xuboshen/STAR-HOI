@@ -75,13 +75,14 @@ def show_masks(
     thresh_sam_score=0.5,
     save_fig_name="default",
 ):
+    if box_coords is None:
+        box_coords = np.array([0, 0, 0, 0])
     if box_coords.shape[0] == 1:
         box_coords = box_coords.reshape(-1)
 
     if len(box_coords.shape) == 1:
 
         for i, (mask, score) in enumerate(zip(masks, scores)):
-            print(i)
             plt.figure(figsize=(10, 10))
             plt.imshow(image)
             show_mask(mask, plt.gca(), borders=borders)
@@ -96,7 +97,8 @@ def show_masks(
                 plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
             plt.axis("off")
             os.makedirs("image_vis", exist_ok=True)
-            plt.savefig(f"image_vis/{i}_{save_fig_name}.png", dpi=200)
+            plt.savefig(f"image_vis/{save_fig_name}.png", dpi=200)
+            plt.close()
     elif len(box_coords.shape) == 2:
         plt.figure(figsize=(10, 10))
         plt.imshow(image)
@@ -104,7 +106,6 @@ def show_masks(
             masks = np.transpose(masks, (1, 0, 2, 3))
             scores = np.transpose(scores, (1, 0))
         for i, (mask, score) in enumerate(zip(masks, scores)):
-            print(i)
             for msk, box, sco in zip(mask, box_coords, score):
                 if sco < thresh_sam_score:
                     continue
@@ -126,5 +127,5 @@ def show_masks(
             #         plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
             plt.axis("off")
             os.makedirs("image_vis", exist_ok=True)
-            plt.savefig(f"image_vis/{i}_{save_fig_name}.png", dpi=200)
-            print(f"saving sam2 mask image ... to image_vis/{i}_{save_fig_name}.png")
+            plt.savefig(f"image_vis/{save_fig_name}.png", dpi=200)
+            plt.close()

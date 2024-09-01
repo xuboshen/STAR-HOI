@@ -81,14 +81,12 @@ class EPICKEvaluator(COCOEvaluator):
             outputs: the outputs of a COCO model. It is a list of dicts with key
                 "instances" that contains :class:`Instances`.
         """
-
         for input, output in zip(inputs, outputs):
             prediction = {"image_id": input["image_id"]}
 
             # pdb.set_trace()
             # print(f'input = {input}')
             # print(f'output = {output}\n')
-
             if "instances" in output:
                 # tmp = output
                 instances = output["instances"].to(self._cpu_device)
@@ -110,14 +108,15 @@ class EPICKEvaluator(COCOEvaluator):
                 prediction["proposals"] = output["proposals"].to(self._cpu_device)
             if len(prediction) > 1:
                 self._predictions.append(prediction)
-
             # print(f"Process: out={len(tmp['instances'])}; #hand={len(tmp['instances'][tmp['instances'].pred_classes==0]) if len(tmp['instances'])!=0 else ''}; #obj={len(tmp['instances'][tmp['instances'].pred_classes==1]) if len(tmp['instances'])!=0 else ''}; ")
             # print(f"Process: out2={len(output['instances'])}; #hand={len(output['instances'][output['instances'].pred_classes==0]) if len(output['instances'])!=0 else ''};  #obj={len(output['instances'][output['instances'].pred_classes==1]) if len(output['instances'])!=0 else ''}\n")
+            # import pdb; pdb.set_trace()
 
 
 def instances_to_coco_json_handside_or_contact(instances, img_id, eval_task=None):
     """
     Dump an "Instances" object to a COCO-format json that's used for evaluation.
+    fixerror: for VISOR-HOS, the hand id is 1, the object id is 2, instead of 0, 1 respectively.
 
     Args:
         instances (Instances):
@@ -175,7 +174,7 @@ def instances_to_coco_json_handside_or_contact(instances, img_id, eval_task=None
     for k in range(num_instance):
         result = {
             "image_id": img_id,
-            "category_id": classes[k],
+            "category_id": classes[k] + 1,
             "bbox": boxes[k],
             "score": scores[k],
         }

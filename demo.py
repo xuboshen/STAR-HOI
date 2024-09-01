@@ -7,8 +7,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from detectron2.structures import Boxes
-from hoid_model.faster_rcnn.resnet import resnet
-from hoid_model.faster_rcnn.vgg16 import vgg16
 from hoid_model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from hoid_model.utils.net_utils import (  # (1) here add a function to viz
     load_net,
@@ -19,11 +17,10 @@ from hoid_model.utils.net_utils import (  # (1) here add a function to viz
     vis_detections_PIL,
 )
 from PIL import Image
-from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
+from tqdm import tqdm
 
 from star_hoi.data.dataloader import build_detection_test_loader
-from star_hoi.data.dataset import VISOR_Image, build_dataset
+from star_hoi.data.dataset import build_dataset
 from star_hoi.data.instances import Instances
 from star_hoi.data.sampler import InferenceSampler
 from star_hoi.data.utils import (
@@ -33,6 +30,7 @@ from star_hoi.data.utils import (
     prepare_inputs,
 )
 from star_hoi.evaluation.evaluator import build_evaluator
+from star_hoi.model.model import build_model
 from star_hoi.utils.utils import concate_hoi, numpy_to_torch_dtype
 from star_hoi.utils.visualize import show_masks
 
@@ -56,10 +54,13 @@ def prepare_output_for_evaluator(
     result = Instances(image_shape)
 
     classes = []
+    # 0: hand, 1: object
     if obj_dets is not None:
         classes.extend([1] * obj_dets.shape[0])
     if hand_dets is not None:
         classes.extend([0] * hand_dets.shape[0])
+    if obj_dets is None and hand_dets is None:
+        classes = [1]
 
     # handside convertion
     handsides = concate_hoi(
@@ -81,10 +82,10 @@ def prepare_output_for_evaluator(
         hand_dets, obj_dets, list(range(6, 9))
     )  # np.concatenate([obj_dets[:, 6:9], hand_dets[:, 6:9]])
     # classes convertion
-    pred_classes = torch.tensor(classes, dtype=bool)
+    pred_classes = torch.tensor(classes, dtype=int)
     # TBD: scores to be considered
-    result.scores = scores
-    result.pred_masks = masks
+    result.scores = scores.reshape(-1)
+    result.pred_masks = masks.astype(bool)
     result.pred_boxes = Boxes(torch.tensor(boxes, dtype=numpy_to_torch_dtype(boxes)))
     result.pred_handsides = handsides
     result.pred_classes = pred_classes
@@ -92,53 +93,13 @@ def prepare_output_for_evaluator(
     result.pred_offsets = offsets
 
     for key, value in result._fields.items():
-        try:
-            result._fields[key] = torch.tensor(value, dtype=numpy_to_torch_dtype(value))
-        except Exception as E:
-            print(E)
+        if key != "pred_boxes" and isinstance(value, np.ndarray):
+            result._fields[key] = torch.tensor(
+                value, dtype=numpy_to_torch_dtype(value.dtype)
+            )
     output["instances"] = result
 
     return output
-
-
-def get_hoid_model(args):
-    # load model
-    load_name = args.hoid_checkpoint
-    pascal_classes = np.asarray(["__background__", "targetobject", "hand"])
-    # initilize the network here.
-    if args.hoid_model == "vgg16":
-        fasterRCNN = vgg16(
-            pascal_classes, pretrained=False, class_agnostic=args.class_agnostic
-        )
-    elif args.hoid_model == "res101":
-        fasterRCNN = resnet(
-            pascal_classes, 101, pretrained=False, class_agnostic=args.class_agnostic
-        )
-    elif args.hoid_model == "res50":
-        fasterRCNN = resnet(
-            pascal_classes, 50, pretrained=False, class_agnostic=args.class_agnostic
-        )
-    elif args.hoid_model == "res152":
-        fasterRCNN = resnet(
-            pascal_classes, 152, pretrained=False, class_agnostic=args.class_agnostic
-        )
-    else:
-        print("network is not defined")
-        raise NotImplementedError(f"{args.hoid_model} not implemented yet.")
-
-    fasterRCNN.create_architecture()
-
-    print("load checkpoint %s" % (load_name))
-    if args.no_cuda is False:
-        checkpoint = torch.load(load_name)
-    else:
-        checkpoint = torch.load(load_name, map_location=(lambda storage, loc: storage))
-    fasterRCNN.load_state_dict(checkpoint["model"])
-    print("load hoi detector model successfully!")
-    if args.no_cuda is False:
-        fasterRCNN = fasterRCNN.cuda()
-
-    return fasterRCNN
 
 
 def sam_prediction(sam_model, image, prompt_inputs: dict):
@@ -147,33 +108,11 @@ def sam_prediction(sam_model, image, prompt_inputs: dict):
     """
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         sam_model.set_image(image)
-        # masks, _, _ = predictor.predict()
         masks, scores, _ = sam_model.predict(**prompt_inputs)
-        # show_masks(
-        #     image,
-        #     masks,
-        #     scores,
-        #     box_coords=box_input,
-        #     thresh_sam_score=args.thresh_sam_score,
-        # )
-        # print(masks.shape)
     return masks, scores
 
 
-def get_model(args, model_names):
-    for model_name in model_names:
-        if model_name == "hoid":
-            hoi_detector = get_hoid_model(args)
-        elif model_name == "sam":
-            sam_model = SAM2ImagePredictor(
-                build_sam2(args.sam_model_cfg, args.sam_checkpoint)
-            )
-        else:
-            raise NotImplementedError(f"{model_name} Not implemented yet")
-
-    return hoi_detector, sam_model
-
-
+@torch.no_grad()
 def validate_visor_image(
     args, val_loader, hoi_detector, sam_model, evaluator, prompt_type, use_half=False
 ):
@@ -188,7 +127,7 @@ def validate_visor_image(
     # evaluator init
     evaluator.reset()
 
-    for i, inputs in enumerate(val_loader):
+    for i, inputs in tqdm(enumerate(val_loader), total=len(val_loader)):
         # hoi_detector pre-processing
         # from BGR, 750, 1333-->750, 1333, BGR
         im_hoi = inputs[0]["image"].permute(1, 2, 0).numpy()
@@ -201,6 +140,7 @@ def validate_visor_image(
             plt.imshow(image)
             plt.axis("off")
             plt.savefig(f"image_vis/test_visor_example_{i}.png", dpi=200)
+            plt.close()
 
         input_dicts, im_scales = prepare_inputs(im_hoi, **input_dicts)
         # model inference
@@ -223,8 +163,8 @@ def validate_visor_image(
                 im2show,
                 obj_dets,
                 hand_dets,
-                0.5,
-                0.5,
+                args.thresh_hoid_score,
+                args.thresh_hoid_score,
                 font_path="hand_object_detector/lib/hoid_model/utils/times_b.ttf",
             )
             im2show.save(os.path.join(args.vis_path, f"test_visor_example_det_{i}.png"))
@@ -236,6 +176,10 @@ def validate_visor_image(
             raise NotImplementedError(f"{args.prompt_type} not implemented yet")
         # model inference
         masks, sam_scores = sam_prediction(sam_model, image, prompt_inputs)
+        # fix box_input if is None
+        if box_input is None:
+            box_input = np.zeros([1, 4])
+            masks = np.zeros_like(masks, dtype=masks.dtype)
         if args.vis:
             show_masks(
                 image,
@@ -245,8 +189,6 @@ def validate_visor_image(
                 thresh_sam_score=args.thresh_sam_score,
                 save_fig_name=f"test_visor_example_mask_{i}",
             )
-            print("mask.shape:", masks.shape)
-            print("sam_scores.shape:", sam_scores.shape)
         # evaluator run
         outputs = prepare_output_for_evaluator(
             image_shape=image.shape[:2],
@@ -256,15 +198,18 @@ def validate_visor_image(
             hand_dets=hand_dets,
             obj_dets=obj_dets,
         )
+        # import pdb; pdb.set_trace()
         evaluator.process(inputs, [outputs])
+        if args.debug and i == 18:
+            break
     results = evaluator.evaluate()
-
     if results is None:
         results = {}
 
     return results
 
 
+@torch.no_grad()
 def validate_demo_image(
     args, val_loader, hoi_detector, sam_model, prompt_type, use_half=False
 ):
@@ -299,7 +244,11 @@ def validate_demo_image(
         if args.vis:
             im2show = np.copy(im_hoi)
             im2show = vis_detections_filtered_objects_PIL(
-                im2show, obj_dets, hand_dets, 0.5, 0.5
+                im2show,
+                obj_dets,
+                hand_dets,
+                args.thresh_hoid_score,
+                args.thresh_hoid_score,
             )
             im2show.save(os.path.join(args.vis_path, "ego4d_det_det.png"))
             print(f"saving hoi detection image ... to {args.vis_path}/ego4d_det.png")
@@ -319,7 +268,6 @@ def validate_demo_image(
                 box_coords=box_input,
                 thresh_sam_score=args.thresh_sam_score,
             )
-            print(masks.shape)
 
 
 if __name__ == "__main__":
@@ -392,9 +340,15 @@ if __name__ == "__main__":
 
     # hoid model parameters
     parser.add_argument(
+        "--hoid-image-size",
+        type=tuple,
+        default=(720, 1280),
+        help="the input image size to hoi detector model",
+    )
+    parser.add_argument(
         "--thresh-hoid-score",
         type=float,
-        default=0.5,
+        default=0.3,
         help="the threshold score that a detection of hoi detector is good",
     )
     parser.add_argument(
@@ -485,6 +439,7 @@ if __name__ == "__main__":
 
     # data preparation
     if args.dataset_name.startswith("visor"):
+        # register for hos evaluation
         val_dataset = build_dataset(
             args, args.dataset_name, args.anno_path, args.image_path
         )
@@ -496,7 +451,7 @@ if __name__ == "__main__":
         image = Image.open("examples/ego4d_example.png")
         image = np.array(image.convert("RGB"))
     # model preparation
-    hoi_detector, sam_model = get_model(args, model_names)
+    hoi_detector, sam_model = build_model(args, model_names)
 
     # inference
     if args.dataset_name.startswith("visor_image"):
