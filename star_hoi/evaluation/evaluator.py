@@ -192,7 +192,7 @@ def instances_to_coco_json_handside_or_contact(instances, img_id, eval_task=None
     return results
 
 
-def build_evaluator(args, eval_task):
+def build_evaluator(args, eval_task, output_path):
     register_epick_instances(
         "epick_visor_2022_val_hos", {}, f"{args.anno_path}", f"{args.image_path}"
     )

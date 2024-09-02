@@ -73,7 +73,7 @@ def show_masks(
     input_labels=None,
     borders=True,
     thresh_sam_score=0.5,
-    save_fig_name="default",
+    save_path="default",
 ):
     if box_coords is None:
         box_coords = np.array([0, 0, 0, 0])
@@ -96,8 +96,7 @@ def show_masks(
             if len(scores) > 1:
                 plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
             plt.axis("off")
-            os.makedirs("image_vis", exist_ok=True)
-            plt.savefig(f"image_vis/{save_fig_name}.png", dpi=200)
+            plt.savefig(save_path, dpi=200)
             plt.close()
     elif len(box_coords.shape) == 2:
         plt.figure(figsize=(10, 10))
@@ -126,6 +125,5 @@ def show_masks(
             #     if len(scores) > 1:
             #         plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
             plt.axis("off")
-            os.makedirs("image_vis", exist_ok=True)
-            plt.savefig(f"image_vis/{save_fig_name}.png", dpi=200)
+            plt.savefig(save_path, dpi=200)
             plt.close()

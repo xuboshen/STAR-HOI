@@ -1,7 +1,8 @@
 checkpoints/*
 examples
 scripts/run_visor_hos/test.sh
-image_vis/*
+scripts/run_visor_hos/debug.sh
+image_vis*/*
 outputs/
 test.py
 

@@ -22,7 +22,6 @@ except NameError:
     xrange = range  # Python 3
 
 PIXEL_MEANS = np.array([[[102.9801, 115.9465, 122.7717]]])
-TEST_MAX_SIZE = 1000
 TRAIN_BBOX_NORMALIZE_STDS = (0.1, 0.1, 0.2, 0.2)
 TRAIN_BBOX_NORMALIZE_MEANS = (0.0, 0.0, 0.0, 0.0)
 pascal_classes = np.asarray(["__background__", "targetobject", "hand"])
@@ -240,7 +239,7 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
     return dataset_dicts
 
 
-def _get_image_blob(im, scales=(600,)):
+def _get_image_blob(im, test_short_size=(800,), test_max_size=1200):
     """Converts an image into a network input.
     Arguments:
       im (ndarray): a color image in BGR order
@@ -259,11 +258,11 @@ def _get_image_blob(im, scales=(600,)):
     processed_ims = []
     im_scale_factors = []
 
-    for target_size in scales:
+    for target_size in test_short_size:
         im_scale = float(target_size) / float(im_size_min)
         # Prevent the biggest axis from being more than MAX_SIZE
-        if np.round(im_scale * im_size_max) > TEST_MAX_SIZE:
-            im_scale = float(TEST_MAX_SIZE) / float(im_size_max)
+        if np.round(im_scale * im_size_max) > test_max_size:
+            im_scale = float(test_max_size) / float(im_size_max)
         im = cv2.resize(
             im_orig,
             None,
@@ -281,14 +280,23 @@ def _get_image_blob(im, scales=(600,)):
     return blob, np.array(im_scale_factors)
 
 
-def prepare_inputs(image, im_data, im_info, gt_boxes, num_boxes, box_info):
+def prepare_inputs(
+    image,
+    test_short_size,
+    test_max_size,
+    im_data,
+    im_info,
+    gt_boxes,
+    num_boxes,
+    box_info,
+):
     """
     prepare inputs to the hoi_detectors
     input image: (H, W, BGR)
     """
     im = image
 
-    blobs, im_scales = _get_image_blob(im)
+    blobs, im_scales = _get_image_blob(im, test_short_size, test_max_size)
     assert len(im_scales) == 1, "Only single-image batch implemented"
     im_blob = blobs
     im_info_np = np.array(
@@ -342,9 +350,61 @@ def initialize_inputs(no_cuda):
     )
 
 
+def calculate_center(bb):
+    return [(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2]
+
+
+def prepare_points(boxes, neg_boxes=None, point_type="center"):
+    """
+    Given box, select points as sam's point inputs, neg_boxes is to provide negative center points
+    args:
+        boxes: (N, 4): x1, y1, x2, y2
+        point_type: 'center', 'box_coords'
+    """
+    if point_type == "center":
+        pos_points = np.array([calculate_center(box) for box in boxes]).reshape(
+            -1, 1, 2
+        )  # (B1, 1, 2)
+        B1 = pos_points.shape[0]
+        pos_labels = np.ones(B1, dtype=int).reshape(B1, 1)
+        if neg_boxes is not None:
+            # inter hands with objects
+            neg_points_inter = np.array([calculate_center(box) for box in neg_boxes])[
+                np.newaxis, ...
+            ].repeat(
+                B1, axis=0
+            )  # B1, B2, 2
+            if B1 > 1:
+                # intra-hands
+                neg_points_intra = np.zeros((B1, B1 - 1, 2))  # B1, B1-1, 2
+                for i in range(B1):
+                    other_coords = np.delete(pos_points, i, axis=0)
+                    neg_points_intra[i] = other_coords.reshape(-1, 2)
+                neg_points = np.concatenate(
+                    [neg_points_intra, neg_points_inter], axis=1
+                )  # B1, B2+B1-1, 2
+            else:
+                neg_points = neg_points_inter
+            neg_labels = np.zeros(neg_points.shape[1], dtype=int)[np.newaxis].repeat(
+                B1, 0
+            )  # B1, B1+B2 - 1
+
+            labels = np.concatenate([pos_labels, neg_labels], axis=1)  # B1, 1+(B1+B2-1)
+            points = np.concatenate(
+                [pos_points, neg_points], axis=1
+            )  # B1, 1+(B1+B2-1), 2
+        else:
+            labels = np.array([1] * (pos_points.shape[0]), np.int32).reshape(B1, 1)
+            points = pos_points
+    else:
+        raise NotImplementedError(f"{point_type} not implemented yet")
+
+    return points, labels
+
+
 def prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type):
     """prompt type for sam: box
-    tgt_type: in ['obj', 'lh', 'rh', 'hoi']
+    tgt_type: in ['obj', 'hand', 'hoi']
     """
     box_input = None
     if obj_dets is not None:
@@ -353,11 +413,11 @@ def prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type):
         hand_boxes = hand_dets[:, :4]
 
     if tgt_type == "obj":
-        box_input = obj_boxes
-    elif tgt_type == "lh":
-        pass
-    elif tgt_type == "rh":
-        pass
+        if obj_dets is not None:
+            box_input = obj_boxes
+    elif tgt_type == "hand":
+        if hand_dets is not None:
+            box_input = hand_boxes
     elif tgt_type == "hoi":
         if obj_dets is None and hand_dets is None:
             return None
@@ -454,3 +514,21 @@ def detection_post_process(
             if pascal_classes[j] == "hand":
                 hand_dets = cls_dets.cpu().numpy()
     return hand_dets, obj_dets
+
+
+def concate_hoi(hand_dets, obj_dets, idx):
+    """
+    concatenate objects with hands along idx, e.g., handsides, contacts
+    """
+    if obj_dets is None and hand_dets is None:
+        # random added
+        rand_num = np.zeros([1, 10])
+        return rand_num[:, idx]
+    elif obj_dets is not None and hand_dets is None:
+        output = obj_dets[:, idx]
+    elif obj_dets is None and hand_dets is not None:
+        output = hand_dets[:, idx]
+    else:
+        output = np.concatenate([obj_dets[:, idx], hand_dets[:, idx]], axis=0)
+
+    return output
