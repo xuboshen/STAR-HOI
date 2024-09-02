@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 import time
 
@@ -36,6 +37,8 @@ from star_hoi.evaluation.evaluator import build_evaluator
 from star_hoi.model.model import build_model
 from star_hoi.utils.utils import numpy_to_torch_dtype, redirect_output, save_args
 from star_hoi.utils.visualize import show_masks
+
+logging.getLogger().setLevel(logging.INFO)
 
 
 def prepare_sam_inputs(

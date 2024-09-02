@@ -1,4 +1,4 @@
-# Segment and Track Any Hand-Object Interactions (HOI-SAM)
+# Segment and Track Any Hand-Object Interactions (Segment Any HOI)
 
 HOI-SAM: Segment and Track Hand-Object Interaction in offline Videos with [HOI Detector](https://openaccess.thecvf.com/content_CVPR_2020/papers/Shan_Understanding_Human_Hands_in_Contact_at_Internet_Scale_CVPR_2020_paper.pdf) and [SAM 2](https://arxiv.org/abs/2408.00714).
 
