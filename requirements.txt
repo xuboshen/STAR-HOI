@@ -5,3 +5,5 @@ matplotlib
 pre-commit
 cython
 pycocotools=2.0.0
+pandas
+decord

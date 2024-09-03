@@ -6,7 +6,18 @@ import numpy as np
 import torch
 
 
+def calculate_center(bb):
+    """
+    calculate center for box (4,) with (x1, y1, x2, y2)
+    """
+    return [(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2]
+
+
 class Tee:
+    """
+    to redirect output to files
+    """
+
     def __init__(self, *files):
         self.files = files
 

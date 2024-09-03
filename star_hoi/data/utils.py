@@ -16,6 +16,8 @@ from hoid_model.roi_layers import nms
 from hoid_model.rpn.bbox_transform import bbox_transform_inv, clip_boxes
 from hoid_model.utils.blob import im_list_to_blob
 
+from star_hoi.utils.utils import calculate_center
+
 try:
     xrange  # Python 2
 except NameError:
@@ -280,7 +282,7 @@ def _get_image_blob(im, test_short_size=(800,), test_max_size=1200):
     return blob, np.array(im_scale_factors)
 
 
-def prepare_inputs(
+def prepare_hoid_inputs(
     image,
     test_short_size,
     test_max_size,
@@ -348,10 +350,6 @@ def initialize_inputs(no_cuda):
         num_boxes=num_boxes,
         box_info=box_info,
     )
-
-
-def calculate_center(bb):
-    return [(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2]
 
 
 def prepare_points(boxes, neg_boxes=None, point_type="center"):
@@ -514,6 +512,50 @@ def detection_post_process(
             if pascal_classes[j] == "hand":
                 hand_dets = cls_dets.cpu().numpy()
     return hand_dets, obj_dets
+
+
+def prepare_sam_image_inputs(
+    args,
+    hand_dets,
+    obj_dets,
+    is_multi_obj,
+    multimask_output,
+    hand_prompt_type,
+    obj_prompt_type,
+):
+    """
+    prepare inputs for sam
+    """
+    prompt_list = []
+    if hand_prompt_type == "box" and obj_prompt_type == "box":
+        box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, "hoi")
+        prompt_inputs = dict(box=box_input, multimask_output=multimask_output)
+        prompt_list.append(prompt_inputs)
+    elif hand_prompt_type == "point" and obj_prompt_type == "box":
+        if obj_dets is not None:
+            # object prompt prepare
+            obj_box = prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type="obj")
+            obj_prompt_inputs = dict(box=obj_box, multimask_output=multimask_output)
+            prompt_list.append(obj_prompt_inputs)
+        if hand_dets is not None:
+            # hand prompt prepare
+            hand_point, hand_point_labels = prepare_points(
+                hand_dets[:, :4], obj_dets[:, :4] if obj_dets is not None else None
+            )
+            hand_prompt_inputs = dict(
+                point_coords=hand_point,
+                point_labels=hand_point_labels,
+                multimask_output=multimask_output,
+            )
+            prompt_list.append(hand_prompt_inputs)
+    else:
+        raise NotImplementedError(
+            f"{hand_prompt_type} or {args.obj_prompt_type} not Implemented yet, \
+            currently (hand, obj) only supports: (box, box), (point, box) inputs"
+        )
+    if prompt_list == []:
+        prompt_list.append(dict(multimask_output=multimask_output))
+    return prompt_list
 
 
 def concate_hoi(hand_dets, obj_dets, idx):
