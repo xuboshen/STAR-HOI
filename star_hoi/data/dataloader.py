@@ -14,6 +14,30 @@ def trivial_batch_collator(batch):
     return batch
 
 
+def build_dataloader(
+    dataset_name,
+    dataset: Union[List[Any], torchdata.Dataset],
+    sampler: Optional[torchdata.Sampler] = None,
+    drop_last: bool = False,
+    batch_size: int = 1,
+    num_workers: int = 0,
+    collate_fn: Optional[Callable[[List[Any]], Any]] = None,
+):
+    if dataset_name == "visor_image":
+        return build_detection_test_loader(
+            dataset, sampler, batch_size, num_workers, collate_fn
+        )
+    elif dataset_name == "ego4d_video":
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            drop_last=drop_last,
+            num_workers=num_workers,
+            collate_fn=trivial_batch_collator if collate_fn is None else collate_fn,
+        )
+
+
 def build_detection_test_loader(
     dataset: Union[List[Any], torchdata.Dataset],
     sampler: Optional[torchdata.Sampler] = None,
@@ -21,7 +45,6 @@ def build_detection_test_loader(
     num_workers: int = 0,
     collate_fn: Optional[Callable[[List[Any]], Any]] = None,
 ):
-
     # augmentations=[
     #     ResizeShortestEdge(
     #         short_edge_length=(800, 800), max_size=1333, sample_style="choice"

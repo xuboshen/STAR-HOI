@@ -1,8 +1,43 @@
+import pandas as pd
 import torch
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
-from .utils import _load_epick_json
+from .utils import _load_epick_json, video_loader
+
+
+class Ego4d_Video(Dataset):
+    def __init__(self, anno_path, video_root, clip_length=4):
+        super().__init__()
+        self.samples = pd.read_csv(anno_path, sep="\t")
+        self.root = video_root
+        self.clip_length = clip_length
+
+    def load_image(self, image_path):
+        return Image.open(image_path)
+
+    def __getitem__(self, idx):
+        itemHOI = self.samples.iloc[idx]
+        try:
+            frames = video_loader(
+                self.root,
+                itemHOI["video_uid"],
+                float(itemHOI["clip_start"]),
+                end_second=float(itemHOI["clip_end"]),
+                clip_length=self.clip_length,
+                jitter=False,
+            )
+        except Exception as e:
+            print(e)
+            frames = None
+        return {
+            "frame": frames,
+            "uid": str(itemHOI["video_uid"]),
+            "timestamp": str(itemHOI["narration_time"]),
+        }  # image, mask, box
+
+    def __len__(self):
+        return len(self.samples)
 
 
 class VISOR_Image(Dataset):
@@ -30,9 +65,11 @@ class VISOR_Image(Dataset):
         return len(self.file_list)
 
 
-def build_dataset(args, dataset_name, anno_path, image_root):
+def build_dataset(args, dataset_name, anno_path, root):
     if dataset_name == "visor_image":
-        dataset = VISOR_Image(anno_path, image_root)
+        dataset = VISOR_Image(anno_path, root)
+    elif dataset_name == "ego4d_video":
+        dataset = Ego4d_Video(anno_path, root, args.clip_length)
     return dataset
 
 

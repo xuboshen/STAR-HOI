@@ -37,7 +37,7 @@ def parse_args():
         "--dataset-name",
         default="demo_image",
         type=str,
-        choices=["demo_image", "demo_video", "visor_image", "visor_video"],
+        choices=["demo_image", "demo_video", "visor_image", "ego4d_video"],
         help="choose from visor_sparse, visor_dense, demo_image, and demo_video",
     )
     parser.add_argument(
@@ -45,12 +45,6 @@ def parse_args():
         default=100,
         type=int,
         help="print frequency during inference",
-    )
-    parser.add_argument(
-        "--model-names",
-        default=["hoid", "sam_video"],
-        type=list,
-        help="use of off-the-shelf models",
     )
     parser.add_argument(
         "--no-cuda",
@@ -73,6 +67,28 @@ def parse_args():
         type=str,
         default="image_vis",
         help="visualization path to save",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=16,
+        help="numbers of data processes init in dataloader",
+    )
+    parser.add_argument(
+        "--save-results",
+        action="store_true",
+        help="Default is False, i.e., do not save",
+    )
+    parser.add_argument(
+        "--save-path",
+        type=str,
+        default="results",
+        help="default save to ./results",
+    )
+    parser.add_argument(
+        "--multigpu-inference",
+        action="store_true",
+        help="whether to use multiple gpus for inference, default is not",
     )
 
     # hoid model parameters
@@ -131,7 +147,7 @@ def parse_args():
     parser.add_argument(
         "--thresh-sam-score",
         type=float,
-        default=0.7,
+        default=0,
         help="the threshold score that a object is good",
     )
     parser.add_argument(

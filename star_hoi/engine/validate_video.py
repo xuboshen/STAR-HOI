@@ -1,9 +1,11 @@
+import json
 import os
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from hoid_model.utils.net_utils import vis_detections_filtered_objects_PIL
+from tqdm import tqdm
 
 from star_hoi.data.utils import (
     detection_post_process,
@@ -12,6 +14,7 @@ from star_hoi.data.utils import (
     prepare_hoid_inputs,
     prepare_sam_frame_inputs,
 )
+from star_hoi.utils.utils import mask_decode, mask_encode
 from star_hoi.utils.visualize import show_mask
 
 
@@ -23,6 +26,8 @@ def select_best_hoi_frame(
     hand_prompt_type,
     obj_prompt_type,
     is_multi_obj,
+    vis_results=True,
+    iter_number=0,
 ):
     """
     choose the best hoi frame masks for sam2 tracking initialization
@@ -37,6 +42,7 @@ def select_best_hoi_frame(
                 2 O: other person contact
                 3 P: portable object contact
                 4 F: stationary object contact (e.g.furniture)
+        frames (ndarray, uint8): B, H, W, 3,
         obj_dets (ndarray): N, 10, the same format with hand_dets
     returns:
         hoi_boxes (nd.array): we will also save the numbers into hdf5 files
@@ -76,12 +82,14 @@ def select_best_hoi_frame(
             hoi_boxes[idx, : hand_dets.shape[0], :] = hand_dets
         if obj_dets is not None:
             hoi_boxes[idx, 2 : (2 + obj_dets.shape[0]), :] = obj_dets
-        if args.vis:
+        if vis_results is True:
             # raw image
             plt.figure(figsize=(10, 10))
             plt.imshow(frame)
             plt.axis("off")
-            plt.savefig(f"{args.vis_path}/demo_video_example_{idx}.png", dpi=200)
+            save_path = f"{args.vis_path}/{iter_number}"
+            os.makedirs(save_path, exist_ok=True)
+            plt.savefig(f"{save_path}/frame_{idx}.png", dpi=200)
             plt.close()
 
             # hoid output
@@ -94,9 +102,7 @@ def select_best_hoi_frame(
                 args.thresh_hoid_score,
                 font_path="hand_object_detector/lib/hoid_model/utils/times_b.ttf",
             )
-            im2show.save(
-                os.path.join(args.vis_path, f"demo_video_example_det_{idx}.png")
-            )
+            im2show.save(f"{save_path}/frame_{idx}_det.png")
         # filter no contacts
         if hand_dets is None or all(hand_dets[:, 5] == 0) is True or init_frame is True:
             continue
@@ -120,7 +126,7 @@ def select_best_hoi_frame(
         if box_input is None:
             box_input = np.zeros([1, 4])
             masks = np.zeros_like(masks, dtype=masks.dtype)
-        if args.vis:
+        if vis_results is True:
             # sam2 output
             plt.figure(figsize=(10, 10))
             plt.imshow(frame)
@@ -128,7 +134,7 @@ def select_best_hoi_frame(
                 show_mask(masks[i], plt.gca(), obj_id=out_obj_id, borders=False)
             plt.axis("off")
             plt.savefig(
-                f"{args.vis_path}/demo_video_example_mask_{idx}_init_propogate.png",
+                f"{save_path}/frame_{idx}_init_mask.png",
                 dpi=200,
             )
             plt.close()
@@ -136,7 +142,9 @@ def select_best_hoi_frame(
     return hoi_boxes, masks, state, obj_id_mapping
 
 
-def sam_video_prediction(args, predictor, state, frames):
+def sam_video_prediction(
+    args, predictor, state, frames, vis_results=True, iter_number=0
+):
     """
     sam prediction: input images, output region masks
     args:
@@ -164,7 +172,7 @@ def sam_video_prediction(args, predictor, state, frames):
                 for i, out_obj_id in enumerate(out_obj_ids)
             }
         # video reverse seqeunce: [init_frames, init_frames--...]
-        if args.vis:
+        if vis_results is True:
             # render the segmentation results every few frames
             vis_frame_stride = 1
             plt.close("all")
@@ -174,8 +182,10 @@ def sam_video_prediction(args, predictor, state, frames):
                 plt.imshow(frames[out_frame_idx])
                 for out_obj_id, out_mask in video_segments[out_frame_idx].items():
                     show_mask(out_mask, plt.gca(), obj_id=out_obj_id, borders=False)
+                save_path = f"{args.vis_path}/{iter_number}"
+                os.makedirs(save_path, exist_ok=True)
                 plt.savefig(
-                    f"{args.vis_path}/demo_video_example_mask_propogate_{out_frame_idx}.png",
+                    f"{save_path}/frame_{out_frame_idx}_propogate_mask.png",
                     dpi=200,
                 )
                 plt.close()
@@ -275,5 +285,88 @@ def validate_demo_video(
         save_masks(video_segments)
 
 
-def validate_ego4d_video():
-    pass
+@torch.no_grad()
+def validate_ego4d_video(
+    args,
+    val_loader,
+    hoi_detector,
+    sam_video_model,
+    hand_prompt_type,
+    obj_prompt_type,
+    use_half=False,
+):
+    """
+    used for data preprocessing without evaluation
+    """
+    print("Inference Begins...")
+    hoi_detector.eval()
+    is_multi_obj = args.multiobj_track
+    for i, inputs in tqdm(enumerate(val_loader), total=len(val_loader)):
+        frames, video_uid, narration_time = (
+            inputs[0]["frame"],
+            inputs[0]["uid"],
+            inputs[0]["timestamp"],
+        )
+        if args.save_results and os.path.exists(
+            os.path.join(args.save_path, video_uid, narration_time + ".json")
+        ):
+            continue
+        if frames is None or frames.sum() == 0:
+            continue
+        hoi_boxes, masks, state, obj_id_mapping = select_best_hoi_frame(
+            args,
+            np.array(frames.detach().cpu(), dtype=np.uint8),
+            sam_video_model,
+            hoi_detector,
+            hand_prompt_type,
+            obj_prompt_type,
+            is_multi_obj,
+            vis_results=(args.vis is True and i % args.vis_freq == 0),
+            iter_number=i,
+        )
+        video_segments = sam_video_prediction(
+            args,
+            sam_video_model,
+            state,
+            np.array(frames, dtype=np.uint8),
+            vis_results=(args.vis is True and i % args.vis_freq == 0),
+            iter_number=i,
+        )
+        if args.save_results:
+
+            def save_masks(
+                video_uid: str,
+                narration_time: str,
+                video_segments,
+                obj_id_mapping,
+            ):
+                mask_dicts = {}
+                for frame_idx, mask_list_dicts in video_segments.items():
+                    mask_dicts[frame_idx] = {}
+                    for obj_id, mask in mask_list_dicts.items():
+                        mask = mask[0]
+                        mask_dicts[frame_idx][obj_id] = {
+                            "type": obj_id_mapping[obj_id],
+                            "mask": mask_encode(mask),
+                            "H": mask.shape[0],
+                            "W": mask.shape[1],
+                        }
+                os.makedirs(
+                    os.path.join(args.save_path, video_uid),
+                    exist_ok=True,
+                )
+                with open(
+                    os.path.join(args.save_path, video_uid, narration_time + ".json"),
+                    "w",
+                ) as f:
+                    json.dump(mask_dicts, f)
+
+            save_masks(video_uid, narration_time, video_segments, obj_id_mapping)
+
+            def save_hoi(box):
+                np.save(
+                    os.path.join(args.save_path, video_uid, narration_time + ".npy"),
+                    box,
+                )
+
+            save_hoi(hoi_boxes)

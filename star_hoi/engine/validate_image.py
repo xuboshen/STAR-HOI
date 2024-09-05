@@ -180,7 +180,6 @@ def validate_demo_image(
     print("demo image processing begins...")
     hoi_detector.eval()
     is_multi_obj = args.multiobj_track
-    tgt_type = args.target_type
     hoid_test_short_size = (args.hoid_test_short_size,)
     hoid_input_dicts = initialize_inputs(no_cuda=args.no_cuda)
     # im_hoi = cv2.imread("examples/ego4d_example.png")
@@ -224,15 +223,28 @@ def validate_demo_image(
             im2show.save(os.path.join(args.vis_path, "ego4d_example_det.png"))
             print(f"saving hoi detection image ... to {args.vis_path}/ego4d_det.png")
         # sam pre-processing
-        if hand_prompt_type == "box" and obj_prompt_type == "box":
-            box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type)
-            prompt_inputs = dict(box=box_input, multimask_output=args.multimask_output)
-        else:
-            raise NotImplementedError(
-                f"{hand_prompt_type} or {args.obj_prompt_type} error"
-            )
+        # if hand_prompt_type == "box" and obj_prompt_type == "box":
+        #     box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type)
+        #     prompt_inputs = dict(box=box_input, multimask_output=args.multimask_output)
+        # else:
+        #     raise NotImplementedError(
+        #         f"{hand_prompt_type} or {args.obj_prompt_type} error"
+        #     )
+        # # sam inference
+        # masks, sam_scores = sam_image_prediction(sam_model, image, [prompt_inputs])
+        box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, "hoi")
+        # sam image processing
+        prompt_list = prepare_sam_image_inputs(
+            args,
+            hand_dets,
+            obj_dets,
+            is_multi_obj,
+            args.multimask_output,
+            hand_prompt_type,
+            obj_prompt_type,
+        )
         # sam inference
-        masks, sam_scores = sam_image_prediction(sam_model, image, [prompt_inputs])
+        masks, sam_scores = sam_image_prediction(sam_model, image, prompt_list)
         # sam image visualizations
         if args.vis and i % args.vis_freq == 0:
             show_masks(

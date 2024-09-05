@@ -3,6 +3,7 @@ examples
 scripts/run_visor_hos/*
 image_vis*/*
 outputs/
+results
 test.py
 
 # ignore all temporal files

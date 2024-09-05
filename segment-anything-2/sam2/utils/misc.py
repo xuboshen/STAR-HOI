@@ -181,7 +181,7 @@ def transform_frames(
     img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
     num_frames = video_frames.shape[0]
     images = torch.zeros(num_frames, 3, image_size, image_size, dtype=torch.float32)
-    for n, img in enumerate(tqdm(images, desc="frame loading (JPEG)")):
+    for n, img in enumerate(images):
         img_pil = Image.fromarray(video_frames[n])
         img_np = np.array(img_pil.convert("RGB").resize((image_size, image_size)))
         if img_np.dtype == np.uint8:  # np.uint8 is expected for JPEG images

@@ -1,9 +1,24 @@
+import base64
 import json
 import os
 import sys
 
 import numpy as np
+import pycocotools.mask as mask_util
 import torch
+
+
+def mask_encode(mask):
+    """
+    encode masks -> binary -> json saved, default size: 1280 * 720
+    """
+    binary_encoded = mask_util.encode(np.array(mask, order="F", dtype="uint8"))
+    encoded_mask = base64.b64encode(binary_encoded["counts"]).decode("utf-8")
+    return encoded_mask
+
+
+def mask_decode():
+    pass
 
 
 def calculate_center(bb):

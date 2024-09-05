@@ -15,7 +15,6 @@ from sam2.utils.misc import (
     load_video_frames,
     transform_frames,
 )
-from tqdm import tqdm
 
 
 class SAM2VideoPredictor(SAM2Base):
@@ -696,7 +695,7 @@ class SAM2VideoPredictor(SAM2Base):
             )
             processing_order = range(start_frame_idx, end_frame_idx + 1)
 
-        for frame_idx in tqdm(processing_order, desc="propagate in video"):
+        for frame_idx in processing_order:
             # We skip those frames already in consolidated outputs (these are frames
             # that received input clicks or mask). Note that we cannot directly run
             # batched forward on them via `_run_single_frame_inference` because the
