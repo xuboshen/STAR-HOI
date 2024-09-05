@@ -2,11 +2,13 @@ import contextlib
 import io
 import logging
 import os
+import os.path as osp
 import pdb
 import random
 import time
 
 import cv2
+import decord
 import numpy as np
 import pycocotools.mask as mask_util
 import torch
@@ -514,6 +516,64 @@ def detection_post_process(
     return hand_dets, obj_dets
 
 
+def prepare_sam_frame_inputs(
+    args,
+    state,
+    frame_idx,
+    hand_dets,
+    obj_dets,
+    is_multi_obj,
+    hand_prompt_type,
+    obj_prompt_type,
+):
+    """
+    prepare inputs for sam video predictor to initialize frame
+    """
+    prompt_list = []
+    obj_id = 0
+    obj_id_mapping = {}
+    if hand_prompt_type == "box" and obj_prompt_type == "box":
+        pass
+    elif hand_prompt_type == "point" and obj_prompt_type == "box":
+        if obj_dets is not None:
+            # object prompt prepare
+            obj_box = prepare_boxes(hand_dets, obj_dets, is_multi_obj, tgt_type="obj")
+            for obj_b in obj_box:
+                obj_prompt_inputs = dict(
+                    inference_state=state,
+                    frame_idx=frame_idx,
+                    obj_id=obj_id,
+                    box=obj_b,
+                )
+                prompt_list.append(obj_prompt_inputs)
+                obj_id_mapping[obj_id] = "object"
+                obj_id += 1
+        if hand_dets is not None:
+            # hand prompt prepare
+            hand_point, hand_point_labels = prepare_points(
+                hand_dets[:, :4], obj_dets[:, :4] if obj_dets is not None else None
+            )
+            for hand_idx in range(len(hand_point)):
+                hand_prompt_inputs = dict(
+                    inference_state=state,
+                    frame_idx=frame_idx,
+                    obj_id=obj_id,
+                    points=hand_point[hand_idx],
+                    labels=hand_point_labels[hand_idx],
+                )
+                obj_id_mapping[obj_id] = "hand"
+                obj_id += 1
+                prompt_list.append(hand_prompt_inputs)
+    else:
+        raise NotImplementedError(
+            f"{hand_prompt_type} or {args.obj_prompt_type} not Implemented yet, \
+            currently (hand, obj) only supports: (box, box), (point, box) inputs"
+        )
+    if prompt_list == []:
+        prompt_list.append({})
+    return prompt_list, obj_id_mapping
+
+
 def prepare_sam_image_inputs(
     args,
     hand_dets,
@@ -524,7 +584,7 @@ def prepare_sam_image_inputs(
     obj_prompt_type,
 ):
     """
-    prepare inputs for sam
+    prepare inputs for sam image
     """
     prompt_list = []
     if hand_prompt_type == "box" and obj_prompt_type == "box":
@@ -574,3 +634,107 @@ def concate_hoi(hand_dets, obj_dets, idx):
         output = np.concatenate([obj_dets[:, idx], hand_dets[:, idx]], axis=0)
 
     return output
+
+
+def get_frame_ids(start_frame, end_frame, num_segments=32, jitter=True):
+    seg_size = float(end_frame - start_frame - 1) / num_segments
+    seq = []
+    for i in range(num_segments):
+        start = int(np.round(seg_size * i) + start_frame)
+        end = int(np.round(seg_size * (i + 1)) + start_frame)
+        end = min(end, end_frame)
+        if jitter:
+            frame_id = np.random.randint(low=start, high=(end + 1))
+        else:
+            frame_id = (start + end) // 2
+        seq.append(frame_id)
+    return seq
+
+
+def video_loader(
+    root,
+    vid,
+    second,
+    end_second=None,
+    chunk_len=300,
+    fps=30,
+    clip_length=32,
+    jitter=False,
+):
+    if chunk_len == -1:
+        vr = decord.VideoReader(osp.join(root, "{}.mp4".format(vid)))
+        second_offset = second
+        if end_second is not None:
+            end_second = min(end_second, len(vr) / vr.get_avg_fps())
+        else:
+            end_second = len(vr) / vr.get_avg_fps()
+    else:
+        chunk_start = int(second) // chunk_len * chunk_len
+        second_offset = second - chunk_start
+        vr = decord.VideoReader(
+            osp.join(root, "{}.mp4".format(vid), "{}.mp4".format(chunk_start))
+        )
+    if fps == -1:
+        fps = vr.get_avg_fps()
+
+    # calculate frame_ids
+    frame_offset = int(np.round(second_offset * fps))
+    total_duration = max(int((end_second - second) * fps), clip_length)
+    if chunk_len == -1:
+        if end_second <= second:
+            raise ValueError("end_second should be greater than second")
+        else:
+            frame_ids = get_frame_ids(
+                frame_offset,
+                min(frame_offset + total_duration, len(vr)),
+                num_segments=clip_length,
+                jitter=jitter,
+            )
+    else:
+        frame_ids = get_frame_ids(
+            frame_offset,
+            frame_offset + total_duration,
+            num_segments=clip_length,
+            jitter=jitter,
+        )
+
+    # load frames
+    if max(frame_ids) < len(vr):
+        try:
+            frames = vr.get_batch(frame_ids).asnumpy()
+        except decord.DECORDError as error:
+            print(error)
+            frames = vr.get_batch([0] * len(frame_ids)).asnumpy()
+    else:
+        # find the remaining frames in the next chunk
+        try:
+            frame_ids_part1 = list(
+                filter(lambda frame_id: frame_id < len(vr), frame_ids)
+            )
+            frames_part1 = vr.get_batch(frame_ids_part1).asnumpy()
+            vr2 = decord.VideoReader(
+                osp.join(
+                    root, "{}.mp4".format(vid), "{}.mp4".format(chunk_start + chunk_len)
+                )
+            )
+            frame_ids_part2 = list(
+                filter(lambda frame_id: frame_id >= len(vr), frame_ids)
+            )
+            frame_ids_part2 = [
+                min(frame_id % len(vr), len(vr2) - 1) for frame_id in frame_ids_part2
+            ]
+            frames_part2 = vr2.get_batch(frame_ids_part2).asnumpy()
+            frames = np.concatenate([frames_part1, frames_part2], axis=0)
+        # the next chunk does not exist; the current chunk is the last one
+        except (RuntimeError, decord.DECORDError) as error:
+            print(error)
+            frame_ids = get_frame_ids(
+                min(frame_offset, len(vr) - 1),
+                len(vr),
+                num_segments=clip_length,
+                jitter=jitter,
+            )
+            frames = vr.get_batch(frame_ids).asnumpy()
+
+    frames = [torch.tensor(frame, dtype=torch.float32) for frame in frames]
+    return torch.stack(frames, dim=0)

@@ -169,6 +169,34 @@ class AsyncVideoFrameLoader:
         return len(self.images)
 
 
+def transform_frames(
+    video_frames,
+    image_size,
+    img_mean=(0.485, 0.456, 0.406),
+    img_std=(0.229, 0.224, 0.225),
+    async_loading_frames=False,
+    compute_device=torch.device("cuda"),
+):
+    img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
+    img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
+    num_frames = video_frames.shape[0]
+    images = torch.zeros(num_frames, 3, image_size, image_size, dtype=torch.float32)
+    for n, img in enumerate(tqdm(images, desc="frame loading (JPEG)")):
+        img_pil = Image.fromarray(video_frames[n])
+        img_np = np.array(img_pil.convert("RGB").resize((image_size, image_size)))
+        if img_np.dtype == np.uint8:  # np.uint8 is expected for JPEG images
+            img_np = img_np / 255.0
+        else:
+            raise RuntimeError(f"Unknown image dtype: {img_np.dtype}")
+        img = torch.from_numpy(img_np).permute(2, 0, 1)
+        video_width, video_height = img_pil.size  # the original video size
+        images[n] = img
+    # normalize by mean and std
+    images -= img_mean
+    images /= img_std
+    return images, video_height, video_width
+
+
 def load_video_frames(
     video_path,
     image_size,

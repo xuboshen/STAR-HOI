@@ -61,7 +61,7 @@ Install `Segment Anything 2`:
 
 ```bash
 cd segment-anything-2
-pip install -e .
+python setup.py build_ext --inplace
 ```
 
 Install `HOI Detectir`:

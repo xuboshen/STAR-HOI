@@ -59,7 +59,7 @@ checkpoint = "../checkpoints/sam2_hiera_large.pt"
 model_cfg = "sam2_hiera_l.yaml"
 predictor = build_sam2_video_predictor(model_cfg, checkpoint)
 video_dir = "notebooks/videos/bedroom"
-seg_type = "multi"
+seg_type = "box"
 # scan all the JPEG frame names in this directory
 frame_names = [
     p
@@ -150,9 +150,11 @@ with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         frame_idx, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
             **input2_dicts
         )
+    import pdb
 
+    pdb.set_trace()
     vis_first_frame = True
-    os.makedirs(f"notebooks/videos/bedroom_vis/{seg_type}", exist_ok=False)
+    os.makedirs(f"notebooks/videos/bedroom_vis/{seg_type}", exist_ok=True)
     if vis_first_frame:
         # show the results on the current (interacted) frame
         plt.figure(figsize=(9, 6))

@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from detectron2.structures import Boxes
 from hoid_model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from hoid_model.utils.net_utils import (  # (1) here add a function to viz
     load_net,
@@ -24,92 +23,246 @@ from tqdm import tqdm
 
 from star_hoi.data.dataloader import build_detection_test_loader
 from star_hoi.data.dataset import build_dataset
-from star_hoi.data.instances import Instances
 from star_hoi.data.sampler import InferenceSampler
 from star_hoi.data.utils import (
     concate_hoi,
     detection_post_process,
+    get_frame_ids,
     initialize_inputs,
     prepare_boxes,
     prepare_hoid_inputs,
     prepare_points,
+    prepare_sam_frame_inputs,
     prepare_sam_image_inputs,
 )
 from star_hoi.evaluation.evaluator import build_evaluator
+from star_hoi.evaluation.utils import prepare_output_for_evaluator
 from star_hoi.model.model import build_model
-from star_hoi.utils.utils import numpy_to_torch_dtype, redirect_output, save_args
-from star_hoi.utils.visualize import show_masks
+from star_hoi.utils.utils import redirect_output, save_args
+from star_hoi.utils.visualize import show_mask, show_masks
 
 logging.getLogger().setLevel(logging.INFO)
 
 
-def prepare_output_for_evaluator(
-    image_shape, masks, boxes, scores, hand_dets, obj_dets
+def select_best_hoi_frame(
+    args,
+    frames,
+    sam_video_model,
+    hoi_detector,
+    hand_prompt_type,
+    obj_prompt_type,
+    is_multi_obj,
 ):
     """
-    explanations of detailed params: https://github.com/epic-kitchens/epic-kitchens-100-hand-object-bboxes/blob/af22bca2124389b96fbf01b19f8684c302fea22f/src/raw_detections/types.py#L24
-    sequence: objects+hands
+    choose the best hoi frame masks for sam2 tracking initialization
+    how to define the "best": detects the max number of boxes + one of the hands is contacting object (occlusion, may not be the best),
+    接触瞬间的那一帧最重要：有接触、少遮挡
     args:
-        image_shape: (height, width), (750, 1333)
-        masks: N (num_of_instances), height, width
-        boxes: N, 2
-        scores: sam scores, N, 1
-        handsides: pred_handsides, N, 2. 0: left hand, 1: right hand
-        hand_dets/obj_dets: note the case that they are <None>
+        hand_dets (ndarray):
+            N, 10=4(box,[x1, y1, x2, y2],:4) + 1(cls_score,float, 4)+1(contact,int,[0, 4], 5)+3(offset_vector,float, 6:9)+1(left/right hand,bool, 9)
+            contact:
+                0 N: no contact
+                1 S: self contact
+                2 O: other person contact
+                3 P: portable object contact
+                4 F: stationary object contact (e.g.furniture)
+        obj_dets (ndarray): N, 10, the same format with hand_dets
+    returns:
+        hoi_boxes (nd.array): we will also save the numbers into hdf5 files
+        best_frame_idx (int): the best frame to select
+        prompt_inputs (List[dicts]): prompt_inputs to the sam2
     """
-    output = {}
-    result = Instances(image_shape)
+    # initializations
+    init_frame = False
+    hoid_test_short_size = (args.hoid_test_short_size,)
+    hoid_input_dicts = initialize_inputs(no_cuda=args.no_cuda)
+    hoi_boxes = np.zeros((12, 4, 10), dtype=float)
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        state = sam_video_model.init_state(video_frames=frames)
+    # processing
+    for idx, frame in enumerate(frames):
+        # H, W, 3
+        im_hoi = frame[..., ::-1]
+        hoid_input_dicts, im_scales = prepare_hoid_inputs(
+            im_hoi, hoid_test_short_size, args.hoid_test_max_size, **hoid_input_dicts
+        )
+        # hoid model inference
+        (rois, cls_prob, bbox_pred, _, _, _, _, _, loss_list) = hoi_detector(
+            **hoid_input_dicts
+        )
+        hand_dets, obj_dets = detection_post_process(
+            args,
+            rois,
+            cls_prob,
+            bbox_pred,
+            loss_list,
+            im_scales,
+            hoid_input_dicts["im_info"],
+            args.thresh_hoid_score,
+        )
+        # prepare saving box outputs
+        if hand_dets is not None:
+            hoi_boxes[idx, : hand_dets.shape[0], :] = hand_dets
+        if obj_dets is not None:
+            hoi_boxes[idx, 2 : (2 + obj_dets.shape[0]), :] = obj_dets
+        if args.vis:
+            # raw image
+            plt.figure(figsize=(10, 10))
+            plt.imshow(frame)
+            plt.axis("off")
+            plt.savefig(f"{args.vis_path}/demo_video_example_{idx}.png", dpi=200)
+            plt.close()
 
-    classes = []
-    # 0: hand, 1: object
-    if obj_dets is not None:
-        classes.extend([1] * obj_dets.shape[0])
-    if hand_dets is not None:
-        classes.extend([0] * hand_dets.shape[0])
-    if obj_dets is None and hand_dets is None:
-        classes = [1]
-
-    # handside convertion
-    handsides = concate_hoi(
-        hand_dets, obj_dets, -1
-    )  # np.concatenate([obj_dets[:, -1], hand_dets[:, -1]])
-    # convert to N, 2, one-hots
-    one_hot_mat = np.eye(2)
-    handsides = one_hot_mat[handsides.astype(int)].astype(float)
-    # contact convertion
-    contacts = concate_hoi(
-        hand_dets, obj_dets, 5
-    )  # np.concatenate([obj_dets[:, 5], hand_dets[:, 5]])
-    # map [1, 4] to 1, while 0 remains 0, also to one-hot
-    contacts = np.where(contacts == 0, 0, 1)
-    contacts = one_hot_mat[contacts.astype(int)].astype(float)
-    # offsets convertion
-    # TBD: seems not very correct in scales.
-    offsets = concate_hoi(
-        hand_dets, obj_dets, list(range(6, 9))
-    )  # np.concatenate([obj_dets[:, 6:9], hand_dets[:, 6:9]])
-    # classes convertion
-    pred_classes = torch.tensor(classes, dtype=int)
-    # TBD: scores to be considered
-    result.scores = scores.reshape(-1)
-    result.pred_masks = masks.astype(bool)
-    result.pred_boxes = Boxes(torch.tensor(boxes, dtype=numpy_to_torch_dtype(boxes)))
-    result.pred_handsides = handsides
-    result.pred_classes = pred_classes
-    result.pred_contacts = contacts
-    result.pred_offsets = offsets
-
-    for key, value in result._fields.items():
-        if key != "pred_boxes" and isinstance(value, np.ndarray):
-            result._fields[key] = torch.tensor(
-                value, dtype=numpy_to_torch_dtype(value.dtype)
+            # hoid output
+            im2show = np.copy(im_hoi)
+            im2show = vis_detections_filtered_objects_PIL(
+                im2show,
+                obj_dets,
+                hand_dets,
+                args.thresh_hoid_score,
+                args.thresh_hoid_score,
+                font_path="hand_object_detector/lib/hoid_model/utils/times_b.ttf",
             )
-    output["instances"] = result
+            im2show.save(
+                os.path.join(args.vis_path, f"demo_video_example_det_{idx}.png")
+            )
+        # filter no contacts
+        if hand_dets is None or all(hand_dets[:, 5] == 0) is True or init_frame is True:
+            continue
+        print(f"The initial frame is {idx}")
+        init_frame = True
+        # sam inference
+        masks, obj_ids, obj_id_mapping = sam_frame_prediction(
+            args,
+            state,
+            sam_video_model,
+            frames,
+            idx,
+            hand_dets,
+            obj_dets,
+            is_multi_obj,
+            hand_prompt_type,
+            obj_prompt_type,
+        )
+        # fix box_input if exists None
+        box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, "hoi")
+        if box_input is None:
+            box_input = np.zeros([1, 4])
+            masks = np.zeros_like(masks, dtype=masks.dtype)
+        if args.vis:
+            # sam2 output
+            plt.figure(figsize=(10, 10))
+            plt.imshow(frame)
+            for i, out_obj_id in enumerate(obj_ids):
+                show_mask(masks[i], plt.gca(), obj_id=out_obj_id, borders=False)
+            plt.axis("off")
+            plt.savefig(
+                f"{args.vis_path}/demo_video_example_mask_{idx}_init_propogate.png",
+                dpi=200,
+            )
+            plt.close()
 
-    return output
+    return hoi_boxes, masks, state, obj_id_mapping
 
 
-def sam_prediction(sam_model, image, prompt_input_list):
+def sam_video_prediction(args, predictor, state, frames):
+    """
+    sam prediction: input images, output region masks
+    args:
+        prompt_list: [obj, hand]
+    returns:
+        masks: N, 1, H, W or 1, H, W. obj_masks->hand_masks
+        scores: N, 1 or N
+    """
+    video_segments = {}
+
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        # video regular sequence: [init_frames, init_frames++...]
+        for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
+            state
+        ):
+            video_segments[out_frame_idx] = {
+                out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                for i, out_obj_id in enumerate(out_obj_ids)
+            }
+        for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
+            state, reverse=True
+        ):
+            video_segments[out_frame_idx] = {
+                out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                for i, out_obj_id in enumerate(out_obj_ids)
+            }
+        # video reverse seqeunce: [init_frames, init_frames--...]
+        if args.vis:
+            # render the segmentation results every few frames
+            vis_frame_stride = 1
+            plt.close("all")
+            for out_frame_idx in range(0, len(frames), vis_frame_stride):
+                plt.figure(figsize=(6, 4))
+                plt.title(f"frame {out_frame_idx}")
+                plt.imshow(frames[out_frame_idx])
+                for out_obj_id, out_mask in video_segments[out_frame_idx].items():
+                    show_mask(out_mask, plt.gca(), obj_id=out_obj_id, borders=False)
+                plt.savefig(
+                    f"{args.vis_path}/demo_video_example_mask_propogate_{out_frame_idx}.png",
+                    dpi=200,
+                )
+                plt.close()
+
+    return video_segments
+
+
+def sam_frame_prediction(
+    args,
+    state,
+    predictor,
+    frames,
+    idx,
+    hand_dets,
+    obj_dets,
+    is_multi_obj,
+    hand_prompt_type,
+    obj_prompt_type,
+):
+    """
+    sam prediction: input frame, output region masks
+    args:
+        prompt_list: [obj, hand]
+    returns:
+        masks: N, 1, H, W or 1, H, W. obj_masks->hand_masks
+        no scores returned
+    """
+    mask_list = []
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        predictor.reset_state(state)
+        # sam image processing
+        prompt_list, obj_id_mapping = prepare_sam_frame_inputs(
+            args,
+            state,
+            idx,
+            hand_dets,
+            obj_dets,
+            is_multi_obj,
+            hand_prompt_type,
+            obj_prompt_type,
+        )
+        if prompt_list == [{}]:
+            return np.zeros(1, frames.shape[2], frames.shape[3]), None, None
+        for prompt_input in prompt_list:
+            frame_idx, out_obj_ids, masks = predictor.add_new_points_or_box(
+                **prompt_input
+            )
+        mask_list.extend([(msk > 0.0).detach().cpu().numpy() for msk in masks])
+    _, H, W = mask_list[0].shape
+    if len(mask_list) > 1:
+        masks = np.stack(mask_list)
+    else:
+        masks = np.array(mask_list).reshape(1, H, W)
+
+    return masks, out_obj_ids, obj_id_mapping
+
+
+def sam_image_prediction(sam_model, image, prompt_input_list):
     """
     sam prediction: input images, output region masks
     args:
@@ -159,7 +312,7 @@ def validate_visor_image(
     hoi_detector.eval()
     is_multi_obj = args.multiobj_track
     hoid_test_short_size = (args.hoid_test_short_size,)
-    input_dicts = initialize_inputs(no_cuda=args.no_cuda)
+    hoid_input_dicts = initialize_inputs(no_cuda=args.no_cuda)
     # evaluator init
     evaluator.reset()
 
@@ -169,12 +322,12 @@ def validate_visor_image(
         im_hoi = inputs[0]["image"].permute(1, 2, 0).numpy()
         # from BGR to RGB, for the sake of sam2 input
         image = np.ascontiguousarray(im_hoi[..., ::-1])
-        input_dicts, im_scales = prepare_hoid_inputs(
-            im_hoi, hoid_test_short_size, args.hoid_test_max_size, **input_dicts
+        hoid_input_dicts, im_scales = prepare_hoid_inputs(
+            im_hoi, hoid_test_short_size, args.hoid_test_max_size, **hoid_input_dicts
         )
         # hoid model inference
         (rois, cls_prob, bbox_pred, _, _, _, _, _, loss_list) = hoi_detector(
-            **input_dicts
+            **hoid_input_dicts
         )
         hand_dets, obj_dets = detection_post_process(
             args,
@@ -183,7 +336,7 @@ def validate_visor_image(
             bbox_pred,
             loss_list,
             im_scales,
-            input_dicts["im_info"],
+            hoid_input_dicts["im_info"],
             args.thresh_hoid_score,
         )
         # hoid visualization
@@ -217,7 +370,7 @@ def validate_visor_image(
             obj_prompt_type,
         )
         # sam inference
-        masks, sam_scores = sam_prediction(sam_model, image, prompt_list)
+        masks, sam_scores = sam_image_prediction(sam_model, image, prompt_list)
         # fix box_input if exists None
         box_input = prepare_boxes(hand_dets, obj_dets, is_multi_obj, "hoi")
         if box_input is None:
@@ -260,12 +413,41 @@ def validate_demo_video(
     args,
     val_loader,
     hoi_detector,
-    sam_model,
+    sam_video_model,
     hand_prompt_type,
     obj_prompt_type,
     use_half=False,
 ):
-    pass
+    """
+    only used for demo, i.e. without evaluation
+    here, val_loader = [video], video = N frames
+    """
+    print("demo image processing begins...")
+    hoi_detector.eval()
+    is_multi_obj = args.multiobj_track
+
+    for idx, frames in enumerate(val_loader):
+        hoi_boxes, masks, state, obj_id_mapping = select_best_hoi_frame(
+            args,
+            frames,
+            sam_video_model,
+            hoi_detector,
+            hand_prompt_type,
+            obj_prompt_type,
+            is_multi_obj,
+        )
+        video_segments = sam_video_prediction(args, sam_video_model, state, frames)
+        if args.vis and idx % args.vis_freq == 0:
+            pass
+
+        def save_boxes(hoi_boxes):
+            pass
+
+        def save_masks(video_segments):
+            pass
+
+        save_boxes(hoi_boxes)
+        save_masks(video_segments)
 
 
 @torch.no_grad()
@@ -287,17 +469,17 @@ def validate_demo_image(
     is_multi_obj = args.multiobj_track
     tgt_type = args.target_type
     hoid_test_short_size = (args.hoid_test_short_size,)
-    input_dicts = initialize_inputs(no_cuda=args.no_cuda)
+    hoid_input_dicts = initialize_inputs(no_cuda=args.no_cuda)
     # im_hoi = cv2.imread("examples/ego4d_example.png")
     for i, image in enumerate(val_loader):
         im_hoi = image[..., ::-1]
         # hoi_detector pre-processing
-        input_dicts, im_scales = prepare_hoid_inputs(
-            im_hoi, hoid_test_short_size, args.hoid_test_max_size, **input_dicts
+        hoid_input_dicts, im_scales = prepare_hoid_inputs(
+            im_hoi, hoid_test_short_size, args.hoid_test_max_size, **hoid_input_dicts
         )  # input: BGR
         # model inference
         (rois, cls_prob, bbox_pred, _, _, _, _, _, loss_list) = hoi_detector(
-            **input_dicts
+            **hoid_input_dicts
         )
         hand_dets, obj_dets = detection_post_process(
             args,
@@ -306,7 +488,7 @@ def validate_demo_image(
             bbox_pred,
             loss_list,
             im_scales,
-            input_dicts["im_info"],
+            hoid_input_dicts["im_info"],
             args.thresh_hoid_score,
         )
         if args.vis and i % args.vis_freq == 0:
@@ -337,7 +519,7 @@ def validate_demo_image(
                 f"{hand_prompt_type} or {args.obj_prompt_type} error"
             )
         # sam inference
-        masks, sam_scores = sam_prediction(sam_model, image, [prompt_inputs])
+        masks, sam_scores = sam_image_prediction(sam_model, image, [prompt_inputs])
         # sam image visualizations
         if args.vis and i % args.vis_freq == 0:
             show_masks(
@@ -397,7 +579,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model-names",
-        default=["hoid", "sam"],
+        default=["hoid", "sam_video"],
         type=list,
         help="use of off-the-shelf models",
     )
@@ -475,7 +657,8 @@ if __name__ == "__main__":
         help="whether perform class_agnostic bbox regression, default is False",
         action="store_true",
     )
-    # sam2 model parameters
+
+    # sam2 model image parameters
     parser.add_argument(
         "--thresh-sam-score",
         type=float,
@@ -523,6 +706,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Default is False, i.e., only one mask output, which is suitable for non-ambiguous prompts (e.g., click + box)",
     )
+
+    # sam2 video configurations
+    parser.add_argument(
+        "--clip-length",
+        type=int,
+        default=12,
+        help="number of frames that we tracks",
+    )
+
     # Downstream datasets
     parser.add_argument(
         "--eval-task",
@@ -540,7 +732,7 @@ if __name__ == "__main__":
     save_args(args)
     redirect_output(os.path.join(args.output_path, "outputs.log"))
     # data preparation
-    if args.dataset_name.startswith("visor"):
+    if args.dataset_name == "visor_image":
         # register for hos evaluation
         val_dataset = build_dataset(
             args, args.dataset_name, args.anno_path, args.image_path
@@ -549,11 +741,26 @@ if __name__ == "__main__":
         val_loader = build_detection_test_loader(val_dataset, sampler)
         # evaluator
         evaluator = build_evaluator(args, args.eval_task, args.output_path)
+    elif args.dataset_name == "ego4d":
+        val_dataset = None
+        sampler = None
+        val_loader = None
     elif args.dataset_name == "demo_image":
         image = Image.open("examples/ego4d_example.png")
-        image = np.array(image.convert("RGB"))
+        image = np.array(image.convert("RGB"))  # H, W, 3
     elif args.dataset_name == "demo_video":
-        video = decord.VideoReader("./output_video.mp4")
+        vr = decord.VideoReader("./examples/ego4d_example.mp4")
+        fps = vr.get_avg_fps()
+        start_second = 0
+        clip_length = args.clip_length
+        frame_offset = int(np.round(start_second * fps))
+        total_duration = len(vr)
+        frame_ids = get_frame_ids(
+            frame_offset,
+            min(frame_offset + total_duration, len(vr)),
+            num_segments=clip_length,
+        )
+        video_frames = vr.get_batch(frame_ids).asnumpy()  # B, H, W, 3
     else:
         raise NotImplementedError(f"{args.dataset_name} is not implemented yet")
     # model preparation
@@ -582,7 +789,7 @@ if __name__ == "__main__":
     elif args.dataset_name == "demo_video":
         validate_demo_video(
             args,
-            [video],
+            [video_frames],
             hoi_detector,
             sam_model,
             args.hand_prompt_type,

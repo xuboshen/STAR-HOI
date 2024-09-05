@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from hoid_model.faster_rcnn.resnet import resnet
 from hoid_model.faster_rcnn.vgg16 import vgg16
-from sam2.build_sam import build_sam2
+from sam2.build_sam import build_sam2, build_sam2_video_predictor
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 
@@ -50,9 +50,13 @@ def build_model(args, model_names):
     for model_name in model_names:
         if model_name == "hoid":
             hoi_detector = build_hoid_model(args)
-        elif model_name == "sam":
+        elif model_name == "sam_image":
             sam_model = SAM2ImagePredictor(
                 build_sam2(args.sam_model_cfg, args.sam_checkpoint)
+            )
+        elif model_name == "sam_video":
+            sam_model = build_sam2_video_predictor(
+                args.sam_model_cfg, args.sam_checkpoint
             )
         else:
             raise NotImplementedError(f"{model_name} Not implemented yet")

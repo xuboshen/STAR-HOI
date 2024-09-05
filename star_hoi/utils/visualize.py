@@ -10,11 +10,13 @@ from PIL import Image
 matplotlib.use("Agg")
 
 
-def show_mask(mask, ax, random_color=False, borders=True):
+def show_mask(mask, ax, random_color=False, obj_id=None, borders=True):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
-        color = np.array([30 / 255, 144 / 255, 255 / 255, 0.6])
+        cmap = plt.get_cmap("tab10")
+        cmap_idx = 0 if obj_id is None else obj_id
+        color = np.array([*cmap(cmap_idx)[:3], 0.6])
     h, w = mask.shape[-2:]
     mask = mask.astype(np.uint8)
     mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
