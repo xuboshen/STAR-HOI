@@ -4,6 +4,6 @@ scipy
 matplotlib
 pre-commit
 cython
-pycocotools=2.0.0
+pycocotools==2.0.8
 pandas
 decord

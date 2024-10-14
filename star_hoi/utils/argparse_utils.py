@@ -200,6 +200,21 @@ def parse_args():
         help="number of frames that we tracks",
     )
 
+    # depth anything configurations
+    parser.add_argument(
+        "--depth-encoder",
+        type=str,
+        default="vitl",
+        choices=["vits", "vitb", "vitl", "vitg"],
+    )
+    parser.add_argument("--depth-input-size", type=int, default=518)
+    parser.add_argument(
+        "--depth-grayscale",
+        dest="grayscale",
+        action="store_true",
+        help="do not apply colorful palette",
+    )
+
     # Downstream datasets
     parser.add_argument(
         "--eval-task",

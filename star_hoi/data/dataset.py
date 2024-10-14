@@ -1,3 +1,5 @@
+import os
+
 import pandas as pd
 import torch
 from PIL import Image
@@ -19,14 +21,17 @@ class Ego4d_Video(Dataset):
     def __getitem__(self, idx):
         itemHOI = self.samples.iloc[idx]
         try:
-            frames = video_loader(
-                self.root,
-                itemHOI["video_uid"],
-                float(itemHOI["clip_start"]),
-                end_second=float(itemHOI["clip_end"]),
-                clip_length=self.clip_length,
-                jitter=False,
-            )
+            if os.path.exists(os.path.join(self.root, itemHOI["video_uid"] + ".mp4")):
+                frames = video_loader(
+                    self.root,
+                    itemHOI["video_uid"],
+                    float(itemHOI["clip_start"]),
+                    end_second=float(itemHOI["clip_end"]),
+                    clip_length=self.clip_length,
+                    jitter=False,
+                )
+            else:
+                frames = None
         except Exception as e:
             print(e)
             frames = None

@@ -340,6 +340,7 @@ def validate_ego4d_video(
                 video_segments,
                 obj_id_mapping,
             ):
+                # 创建mask字典
                 mask_dicts = {}
                 for frame_idx, mask_list_dicts in video_segments.items():
                     mask_dicts[frame_idx] = {}
@@ -351,22 +352,41 @@ def validate_ego4d_video(
                             "H": mask.shape[0],
                             "W": mask.shape[1],
                         }
-                os.makedirs(
-                    os.path.join(args.save_path, video_uid),
-                    exist_ok=True,
-                )
-                with open(
-                    os.path.join(args.save_path, video_uid, narration_time + ".json"),
-                    "w",
-                ) as f:
-                    json.dump(mask_dicts, f)
+
+                save_dir = os.path.join(args.save_path, video_uid)
+                os.makedirs(save_dir, exist_ok=True)
+
+                merged_file_path = os.path.join(save_dir, "merged_file.json")
+
+                if os.path.exists(merged_file_path):
+                    with open(merged_file_path, "r") as f:
+                        merged_data = json.load(f)
+                else:
+                    merged_data = {}
+
+                merged_data[narration_time] = mask_dicts
+
+                with open(merged_file_path, "w") as f:
+                    json.dump(merged_data, f, indent=4)
 
             save_masks(video_uid, narration_time, video_segments, obj_id_mapping)
 
             def save_hoi(box):
-                np.save(
-                    os.path.join(args.save_path, video_uid, narration_time + ".npy"),
-                    box,
-                )
+                save_dir = os.path.join(args.save_path, video_uid)
+                os.makedirs(save_dir, exist_ok=True)
 
+                merged_file_box_path = os.path.join(save_dir, "merged_file_box.json")
+
+                if os.path.exists(merged_file_box_path):
+                    with open(merged_file_box_path, "r") as f:
+                        merged_data = json.load(f)
+                else:
+                    merged_data = {}
+
+                merged_data[narration_time] = box.tolist()
+
+                with open(merged_file_box_path, "w") as f:
+                    json.dump(merged_data, f, indent=4)
+
+            # 调用函数
             save_hoi(hoi_boxes)

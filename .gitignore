@@ -2,6 +2,7 @@ checkpoints/*
 examples
 scripts/run_visor_hos/*
 image_vis*/*
+video_depth_vis
 outputs/
 results
 test.py

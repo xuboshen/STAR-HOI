@@ -3,9 +3,28 @@ import json
 import os
 import sys
 
+import cv2
 import numpy as np
 import pycocotools.mask as mask_util
 import torch
+
+
+def resize_with_aspect_ratio(image, target_size):
+    h, w = image.shape[:2]
+
+    # 计算缩放比例，目标是最短边等于 target_size
+    if h < w:
+        scale = target_size / h
+    else:
+        scale = target_size / w
+
+    # 计算新尺寸
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+
+    # 调整大小
+    resized_img = cv2.resize(image, (new_w, new_h))
+    return resized_img
 
 
 def mask_encode(mask):

@@ -60,6 +60,7 @@ if __name__ == "__main__":
             drop_last=False,
             num_workers=args.num_workers,
         )
+    # demos
     elif args.dataset_name == "demo_image":
         model_names = ["hoid", "sam_image"]
         image = Image.open("examples/ego4d_image_vis/ego4d_example_raw.png")
