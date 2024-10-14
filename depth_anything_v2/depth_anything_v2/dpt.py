@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -214,12 +215,17 @@ class DepthAnythingV2(nn.Module):
     @torch.no_grad()
     def infer_image(self, raw_image, input_size=518):
         image, (h, w) = self.image2tensor(raw_image, input_size)
-
         depth = self.forward(image)
 
-        depth = F.interpolate(
-            depth[:, None], (h, w), mode="bilinear", align_corners=True
-        )[0, 0]
+        if isinstance(raw_image, list):
+            # support batch_inference
+            depth = F.interpolate(
+                depth[:, None], (h, w), mode="bilinear", align_corners=True
+            ).squeeze(1)
+        else:
+            depth = F.interpolate(
+                depth[:, None], (h, w), mode="bilinear", align_corners=True
+            )[0, 0]
 
         return depth.cpu().numpy()
 
@@ -230,7 +236,7 @@ class DepthAnythingV2(nn.Module):
                     width=input_size,
                     height=input_size,
                     resize_target=False,
-                    keep_aspect_ratio=True,
+                    keep_aspect_ratio=False,
                     ensure_multiple_of=14,
                     resize_method="lower_bound",
                     image_interpolation_method=cv2.INTER_CUBIC,
@@ -239,13 +245,18 @@ class DepthAnythingV2(nn.Module):
                 PrepareForNet(),
             ]
         )
-
-        h, w = raw_image.shape[:2]
-
-        image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB) / 255.0
-
-        image = transform({"image": image})["image"]
-        image = torch.from_numpy(image).unsqueeze(0)
+        if isinstance(raw_image, list):
+            h, w = raw_image[0].shape[:2]
+            images = [
+                cv2.cvtColor(image, cv2.COLOR_BGR2RGB) / 255.0 for image in raw_image
+            ]
+            images = [transform({"image": image})["image"] for image in images]
+            image = torch.from_numpy(np.stack(images))
+        else:
+            h, w = raw_image.shape[:2]
+            image = cv2.cvtColor(raw_image, cv2.COLOR_BGR2RGB) / 255.0
+            image = transform({"image": image})["image"]
+            image = torch.from_numpy(image).unsqueeze(0)
 
         DEVICE = (
             "cuda"

@@ -3,7 +3,6 @@ import glob
 import os
 
 import cv2
-import decord
 import matplotlib
 import numpy as np
 import torch
@@ -33,30 +32,28 @@ def ego4d_video_inference(val_loader, depth_anything, args):
             continue
         os.makedirs(os.path.join(args.output_path, video_uid), exist_ok=True)
         depth_list = []
-        for i, frame in enumerate(frames):
-            frame = frame.numpy()
-            frame = frame.astype(np.uint8)
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            depth = depth_anything.infer_image(frame, args.depth_input_size)
-
+        # batch inference
+        frames = frames.numpy().astype(np.uint8)
+        frames = [cv2.cvtColor(frame, cv2.COLOR_RGB2BGR) for frame in frames]
+        depths = depth_anything.infer_image(frames, args.depth_input_size)
+        for i, depth in enumerate(depths):
             depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
             depth = depth.astype(np.uint8)
             from star_hoi.utils.utils import resize_with_aspect_ratio
 
             resized_depth = resize_with_aspect_ratio(depth, 288)
             depth_list.append(resized_depth)
-            # Save or process the depth output
-            output_frame_path = os.path.join(
-                args.output_path, video_uid, f"frame_{i}.png"
-            )
-            cv2.imwrite(output_frame_path, resized_depth)
-            print(f"Saved depth frame {i} at {output_frame_path}")
+            # # Save or process the depth output
+            # output_frame_path = os.path.join(
+            #     args.output_path, video_uid, f"frame_{i}.png"
+            # )
+            # cv2.imwrite(output_frame_path, resized_depth)
+            # print(f"Saved depth frame {i} at {output_frame_path}")
         depth_array = np.array(depth_list)
         np.savez_compressed(
             os.path.join(args.output_path, video_uid, f"{narration_time}_depth.npz"),
             images=depth_array,
         )
-        break
 
 
 def ego4d_demo_inference(video_frames, depth_anything, args):
@@ -80,8 +77,8 @@ def ego4d_demo_inference(video_frames, depth_anything, args):
 if __name__ == "__main__":
     args = parse_args()
     os.makedirs(args.output_path, exist_ok=True)
-    save_args(args)
-    redirect_output(os.path.join(args.output_path, "outputs.log"))
+    # save_args(args)
+    # redirect_output(os.path.join(args.output_path, "outputs.log"))
 
     DEVICE = (
         "cuda"
@@ -110,7 +107,7 @@ if __name__ == "__main__":
             "out_channels": [1536, 1536, 1536, 1536],
         },
     }
-
+    print("1")
     depth_anything = DepthAnythingV2(**model_configs[args.depth_encoder])
     depth_anything.load_state_dict(
         torch.load(
@@ -123,6 +120,8 @@ if __name__ == "__main__":
     # dataset preparation
     if args.dataset_name == "demo_video":
         model_names = ["depth_anything"]
+        import decord
+
         vr = decord.VideoReader("examples/ego4d_example.mp4")
         fps = vr.get_avg_fps()
         start_second = 0
@@ -148,6 +147,7 @@ if __name__ == "__main__":
             drop_last=False,
             num_workers=args.num_workers,
         )
+    print("3")
 
     margin_width = 50
     cmap = matplotlib.colormaps.get_cmap("Spectral_r")

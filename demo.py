@@ -10,7 +10,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from accelerate import Accelerator
-from accelerate.utils import gather_object
 from hoid_model.utils.config import cfg
 from PIL import Image
 

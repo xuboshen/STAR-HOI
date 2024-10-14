@@ -2,7 +2,7 @@
 
 # 定义显卡数量和每张显卡上运行的程序数量
 NUM_GPUS=8
-NUM_TASKS_PER_GPU=16 # original: 16
+NUM_TASKS_PER_GPU=2 # original: 16
 TOTAL_TASKS=$((NUM_GPUS * NUM_TASKS_PER_GPU))
 
 # 基础命令
@@ -13,6 +13,7 @@ BASE_CMD="python main_depth.py \
     --save-results \
     --depth-input-size 518 \
     --depth-grayscale \
+    --num-workers 0 \
     --depth-encoder vitl \
     --clip-length 8"
 
